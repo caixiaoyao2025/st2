@@ -24,7 +24,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install --quiet requests beautifulsoup4 pyyaml openai graph-tool-call
+        run: |
+          pip install requests beautifulsoup4 pyyaml openai graph-tool-call
+          python -c "import graph_tool_call; print('graph-tool-call OK')"
 
       - name: Run retrieval-only test
         env:
