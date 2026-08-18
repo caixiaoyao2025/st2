@@ -76,29 +76,53 @@ def _load_schemas(registry_path: str):
     return tools, schemas, schema_by_name, fnmap
 
 
-def _llm_select(task: str, schemas: list, retries: int = MAX_RETRIES):
-    """Send task to LLM, return the first tool_call function name or None."""
+SELECTOR_SYSTEM = """You are a tool selector. Your ONLY job is to pick the best tool from a list.
+
+Rules:
+- Output ONLY the exact tool name. Nothing else.
+- Do NOT execute the tool.
+- Do NOT ask the user for missing parameters.
+- Do NOT explain your choice.
+- Do NOT describe how to use the tool.
+- Even if required arguments are missing, still select the best tool.
+- If no tool matches, output: NO_MATCHING_TOOL"""
+
+
+def _llm_select(task: str, candidates: list[str], retries: int = MAX_RETRIES):
+    """Send task + candidate list to LLM, return selected tool name or None.
+
+    Uses plain text completion (not tool_call) to enforce strict output.
+    Returns None for NO_MATCHING_TOOL.
+    """
     if not API_KEY:
         raise RuntimeError("Missing API key")
     client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+    numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(candidates))
+    user_msg = f"User request:\n{task}\n\nCandidate tools:\n{numbered}\n\nSelect the best tool:"
     messages = [
-        {"role": "system", "content": "You are a tool-selection assistant. Given a user task, always call the most relevant tool. Never respond with plain text."},
-        {"role": "user", "content": task},
+        {"role": "system", "content": SELECTOR_SYSTEM},
+        {"role": "user", "content": user_msg},
     ]
     for attempt in range(retries):
         try:
             resp = client.chat.completions.create(
                 model=MODEL, messages=messages,
-                tools=schemas if schemas else [],
-                tool_choice="auto",
+                temperature=0,
             )
-            msg = resp.choices[0].message
-            if getattr(msg, "tool_calls", None):
-                return msg.tool_calls[0].function.name
-            # model returned text instead of tool_call — log and return None
-            content = (msg.content or "")[:200]
-            if content:
-                print(f"  [DEBUG] LLM returned text: {content}")
+            text = (resp.choices[0].message.content or "").strip()
+            if text == "NO_MATCHING_TOOL" or text == "":
+                return None
+            # extract tool name: handle "1. bqtools_encode" or just "bqtools_encode"
+            if ". " in text:
+                text = text.split(". ", 1)[1].strip()
+            text = text.strip("`\"'")
+            if text in candidates:
+                return text
+            # fuzzy: check if any candidate is a substring
+            for c in candidates:
+                if c in text:
+                    return c
+            print(f"  [DEBUG] LLM output not in candidates: {text!r}")
             return None
         except Exception as e:
             if attempt < retries - 1:
@@ -180,15 +204,9 @@ def test_selection_retrieval_first():
             continue
         # check retrieval hit
         retrieval_hit = expected in candidate_names
-        # build schemas for candidates
-        candidate_schemas = [schema_by_name[n] for n in candidate_names if n in schema_by_name]
-        if not candidate_schemas:
-            print(f"  [SKIP] {task[:50]}... -> no schemas for candidates")
-            skipped += 1
-            continue
-        # LLM picks from candidates
+        # LLM picks from candidate names (strict text selection)
         llm_total += 1
-        got = _llm_select(task, candidate_schemas)
+        got = _llm_select(task, candidate_names)
         llm_correct_task = got == expected
         if llm_correct_task:
             llm_correct += 1
@@ -206,16 +224,17 @@ def test_selection_retrieval_first():
 
 
 def test_selection_all_tools():
-    """Layer 3: LLM sees ALL schemas, no retrieval."""
+    """Layer 3: LLM sees ALL tool names, no retrieval."""
     registry_path = os.path.join(os.path.dirname(__file__), "data", "mcp_registry.yaml")
     _, all_schemas, schema_by_name, fnmap = _load_schemas(registry_path)
-    print(f"== Selection test (all_tools): {len(all_schemas)} total schemas ==")
+    all_names = list(schema_by_name.keys())
+    print(f"== Selection test (all_tools): {len(all_names)} total tools ==")
     passed = 0
     failed = 0
     neg_correct = 0
     neg_total = 0
     for task, expected in SELECTION_TASKS:
-        got = _llm_select(task, all_schemas)
+        got = _llm_select(task, all_names)
         if expected is None:
             neg_total += 1
             if got is None:
