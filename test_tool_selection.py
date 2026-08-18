@@ -294,58 +294,147 @@ def test_agent_loop():
 
 
 def test_agent_replan():
-    """Test replan loop: fake runner returns unsatisfied → agent excludes and retries."""
+    """Test replan loop with fully deterministic fixtures (no LLM, no real registry).
+
+    Uses fake tools to isolate the replan logic:
+    - Scenario 1: wrong tool → not satisfied → replan → right tool → satisfied → DONE
+    - Scenario 2: all tools fail → exhaust retries → TOOL_NOT_APPLICABLE
+    - Scenario 3: missing required args → NEED_USER_INPUT
+    """
     from agent_connector.agent import (
         agent_loop, DONE, NEED_USER_INPUT, TOOL_NOT_APPLICABLE,
     )
-    from openai import OpenAI as OAI
-    registry_path = os.path.join(os.path.dirname(__file__), "data", "mcp_registry.yaml")
-    graph = build_graph_from_registry(registry_path)
-    _, all_schemas, schema_by_name, fnmap = _load_schemas(registry_path)
-    client = OAI(base_url=BASE_URL, api_key=API_KEY)
-    print(f"== Agent replan test (fake runner) ==")
 
-    # Scenario 1: first tool always "not satisfied" → agent retries → picks another
-    call_count = [0]
-    def fake_runner_first_fail(spec, args, timeout=300):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            # first attempt: return something that doesn't satisfy the query
+    print(f"== Agent replan test (deterministic fixtures) ==")
+
+    # -- Fake tool schemas (no retrieval, no LLM) --
+    _mk_schema = lambda name, desc: {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": desc,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input": {"type": "string", "description": "Input file"},
+                },
+                "required": ["input"],
+            },
+        },
+    }
+    fake_schemas = [
+        _mk_schema("fake_wrong", "A tool that does metadata inspection"),
+        _mk_schema("fake_right", "A tool that identifies metagenomic species"),
+    ]
+    fake_fnmap = {}
+    for s in fake_schemas:
+        fn = s["function"]
+        fake_fnmap[fn["name"]] = {
+            "function": fn,
+            "inputs": {"input": {"required": True, "description": "Input file"}},
+        }
+
+    query = "Identify species from /data/reads.fastq"
+
+    # Scenario 1: replan — wrong tool first, then right tool
+    # Both selector and validator track call counts to control flow
+    sel_count = [0]
+    val_count = [0]
+
+    def fake_selector(q, candidates):
+        sel_count[0] += 1
+        # Always pick fake_wrong if available, otherwise fake_right
+        if "fake_wrong" in candidates:
+            return "fake_wrong"
+        if "fake_right" in candidates:
+            return "fake_right"
+        return None
+
+    def fake_extractor(q, spec):
+        return {"input": "/data/reads.fastq"}
+
+    def fake_runner(spec, args, timeout=300):
+        name = spec["function"]["name"]
+        if name == "fake_wrong":
             return {"return_code": 0, "status": "ok",
                     "stdout": "metadata: record_count=100\nformat: BINSEQ\n"}
-        # second attempt: return something relevant
         return {"return_code": 0, "status": "ok",
                 "stdout": "species: Lactobacillus, Bifidobacterium, Escherichia\n"}
 
-    # explicit file path so arg extraction succeeds
-    query = "Identify metagenomic species from /data/reads.fastq using ONT reads"
-    call_count[0] = 0
-    r1 = agent_loop(query, graph, all_schemas, fnmap, client, MODEL,
-                     runner_fn=fake_runner_first_fail)
-    print(f"  Scenario 1 (replan): status={r1['status']} tool={r1['tool']} "
-          f"attempts={len(r1['attempts'])}")
-    tools_tried = [a["tool"] for a in r1["attempts"]]
-    print(f"    tools tried: {tools_tried}")
-    s1_ok = len(r1["attempts"]) >= 2 and r1["status"] == DONE
-    print(f"    [{'PASS' if s1_ok else 'FAIL'}] replan happened (>=2 attempts, DONE)")
+    def fake_validator(q, tool_name, result):
+        val_count[0] += 1
+        if tool_name == "fake_wrong":
+            return False, "Tool only provided metadata, not species identification"
+        return True, ""
+
+    sel_count[0] = 0
+    val_count[0] = 0
+    r1 = agent_loop(query, None, fake_schemas, fake_fnmap, None, None,
+                     runner_fn=fake_runner, selector_fn=fake_selector,
+                     extractor_fn=fake_extractor, validator_fn=fake_validator)
+    tools_tried_1 = [a["tool"] for a in r1["attempts"]]
+    print(f"  Scenario 1 (replan): status={r1['status']} "
+          f"attempts={len(r1['attempts'])} tools_tried={tools_tried_1}")
+    s1_ok = (r1["status"] == DONE
+             and len(r1["attempts"]) >= 2
+             and tools_tried_1[0] == "fake_wrong"
+             and tools_tried_1[-1] == "fake_right")
+    print(f"    [{'PASS' if s1_ok else 'FAIL'}] wrong→right replan")
 
     # Scenario 2: all tools fail → exhaust retries → TOOL_NOT_APPLICABLE
-    def fake_runner_always_fail(spec, args, timeout=300):
-        return {"return_code": 1, "status": "error",
-                "stdout": "", "stderr": "tool error"}
+    def fake_validator_always_fail(q, tool_name, result):
+        return False, "Never satisfies"
 
-    r2 = agent_loop(query, graph, all_schemas, fnmap, client, MODEL,
-                     runner_fn=fake_runner_always_fail)
-    print(f"\n  Scenario 2 (all fail): status={r2['status']} attempts={len(r2['attempts'])}")
-    s2_ok = r2["status"] == TOOL_NOT_APPLICABLE
-    print(f"    [{'PASS' if s2_ok else 'FAIL'}] exhausted → TOOL_NOT_APPLICABLE")
+    sel_count[0] = 0
+    r2 = agent_loop(query, None, fake_schemas, fake_fnmap, None, None,
+                     runner_fn=fake_runner, selector_fn=fake_selector,
+                     extractor_fn=fake_extractor,
+                     validator_fn=fake_validator_always_fail)
+    tools_tried_2 = [a["tool"] for a in r2["attempts"]]
+    print(f"\n  Scenario 2 (all fail): status={r2['status']} "
+          f"attempts={len(r2['attempts'])} tools_tried={tools_tried_2}")
+    s2_ok = (r2["status"] == TOOL_NOT_APPLICABLE
+             and len(r2["attempts"]) >= 2
+             and "fake_wrong" in tools_tried_2
+             and "fake_right" in tools_tried_2)
+    print(f"    [{'PASS' if s2_ok else 'FAIL'}] exhaust → TOOL_NOT_APPLICABLE")
 
-    # Scenario 3: argument extraction → NEED_USER_INPUT
-    r3 = agent_loop("Decode this BINSEQ file", graph, all_schemas, fnmap, client, MODEL,
-                     runner_fn=None)
-    print(f"\n  Scenario 3 (missing args): status={r3['status']} tool={r3['tool']} "
-          f"missing={r3.get('missing', [])}")
-    s3_ok = r3["status"] == NEED_USER_INPUT and r3["tool"] is not None
+    # Scenario 3: missing required args → NEED_USER_INPUT (no runner needed)
+    schema_missing = [{
+        "type": "function",
+        "function": {
+            "name": "fake_needs_args",
+            "description": "A tool that needs arguments",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input": {"type": "string", "description": "Input file"},
+                },
+                "required": ["input"],
+            },
+        },
+    }]
+    fnmap_missing = {
+        "fake_needs_args": {
+            "function": schema_missing[0]["function"],
+            "inputs": {"input": {"required": True, "description": "Input file"}},
+        },
+    }
+
+    def fake_extractor_empty(q, spec):
+        return {}  # extracts nothing
+
+    def fake_selector_always(q, candidates):
+        return candidates[0] if candidates else None
+
+    r3 = agent_loop("Do something vague", None, schema_missing, fnmap_missing,
+                     None, None, runner_fn=None, selector_fn=fake_selector_always,
+                     extractor_fn=fake_extractor_empty)
+    print(f"\n  Scenario 3 (missing args): status={r3['status']} "
+          f"tool={r3['tool']} missing={r3.get('missing', [])}")
+    s3_ok = (r3["status"] == NEED_USER_INPUT
+             and r3["tool"] == "fake_needs_args"
+             and "input" in r3.get("missing", []))
     print(f"    [{'PASS' if s3_ok else 'FAIL'}] NEED_USER_INPUT with missing args")
 
     total = 3

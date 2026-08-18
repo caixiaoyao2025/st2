@@ -152,6 +152,9 @@ def agent_loop(
     client: OpenAI,
     model: str,
     runner_fn=None,
+    selector_fn=None,
+    extractor_fn=None,
+    validator_fn=None,
 ) -> dict:
     """Run the full agent loop: select → extract → validate → execute → check.
 
@@ -164,6 +167,12 @@ def agent_loop(
         model: Model name.
         runner_fn: callable(spec, args, timeout) → raw result dict.
                    If None, skips execution (selection-only mode).
+        selector_fn: callable(query, candidates) → tool_name|None.
+                     If None, uses _select_tool (LLM-based).
+        extractor_fn: callable(query, spec) → dict[str, str].
+                       If None, uses extract_arguments (LLM-based).
+        validator_fn: callable(query, tool_name, result_text) → (bool, reason).
+                       If None, uses validate_result (LLM-based).
 
     Returns:
         {
@@ -182,8 +191,11 @@ def agent_loop(
 
     for attempt in range(MAX_RETRIES + 1):
         # 1. Retrieve candidates
-        results = retrieve_tools(graph, query, top_k=5)
-        candidate_names = [r[0] for r in results if r[0] not in excluded]
+        if graph is not None:
+            results = retrieve_tools(graph, query, top_k=5)
+            candidate_names = [r[0] for r in results if r[0] not in excluded]
+        else:
+            candidate_names = []
         if not candidate_names:
             # fallback: use all tools minus excluded
             candidate_names = [n for n in candidates_all if n not in excluded]
@@ -196,7 +208,8 @@ def agent_loop(
             }
 
         # 2. Select tool (text-based)
-        tool_name = _select_tool(query, candidate_names, client, model)
+        _sel = selector_fn or (lambda q, c: _select_tool(q, c, client, model))
+        tool_name = _sel(query, candidate_names)
         if tool_name is None:
             return {
                 "status": TOOL_NOT_APPLICABLE,
@@ -214,7 +227,8 @@ def agent_loop(
             continue
 
         # 4. Extract arguments
-        args = extract_arguments(query, spec, client, model)
+        _ext = extractor_fn or (lambda q, s: extract_arguments(q, s, client, model))
+        args = _ext(query, spec)
 
         # 5. Input validation
         is_valid, missing = validate_arguments(spec, args)
@@ -263,9 +277,12 @@ def agent_loop(
             continue
 
         # 7. Result validation
-        satisfied, reason = validate_result(
-            query, tool_name, result_text, client, model
-        )
+        if validator_fn:
+            satisfied, reason = validator_fn(query, tool_name, result_text)
+        else:
+            satisfied, reason = validate_result(
+                query, tool_name, result_text, client, model
+            )
 
         attempts.append({"tool": tool_name, "args": args,
                          "result": result_text[:500],
