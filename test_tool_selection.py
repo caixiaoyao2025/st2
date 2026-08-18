@@ -123,7 +123,7 @@ def _llm_select(task: str, candidates: list[str], retries: int = MAX_RETRIES):
                 if c in text:
                     return c
             print(f"  [DEBUG] LLM output not in candidates: {text!r}")
-            return None
+            return text  # return raw for caller to see
         except Exception as e:
             if attempt < retries - 1:
                 print(f"  [retry {attempt+1}] {e}")
