@@ -81,7 +81,10 @@ def _llm_select(task: str, schemas: list, retries: int = MAX_RETRIES):
     if not API_KEY:
         raise RuntimeError("Missing API key")
     client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-    messages = [{"role": "user", "content": task}]
+    messages = [
+        {"role": "system", "content": "You are a tool-selection assistant. Given a user task, always call the most relevant tool. Never respond with plain text."},
+        {"role": "user", "content": task},
+    ]
     for attempt in range(retries):
         try:
             resp = client.chat.completions.create(
@@ -92,7 +95,11 @@ def _llm_select(task: str, schemas: list, retries: int = MAX_RETRIES):
             msg = resp.choices[0].message
             if getattr(msg, "tool_calls", None):
                 return msg.tool_calls[0].function.name
-            return None  # LLM returned text instead of tool_call
+            # model returned text instead of tool_call — log and return None
+            content = (msg.content or "")[:200]
+            if content:
+                print(f"  [DEBUG] LLM returned text: {content}")
+            return None
         except Exception as e:
             if attempt < retries - 1:
                 print(f"  [retry {attempt+1}] {e}")
