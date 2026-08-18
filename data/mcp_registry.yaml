@@ -1450,8 +1450,8 @@ tools:
   callable_via: ''
   readme_examples: []
   readme_usage: ''
-  description: '[Auto-discovered] KMA-bAsed Pipeline for meTAgenomic specIes ideNtification
-    (⭐3, Python) (license: LICENSE)'
+  description: Identify metagenomic species from Oxford Nanopore (ONT) sequencing
+    reads using KMA database alignment.
   output_control:
     intercept_large_output: true
     max_preview_lines: 50
