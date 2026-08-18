@@ -319,7 +319,8 @@ Rules:
 - Do NOT ask the user for missing parameters.
 - Do NOT explain your choice.
 - Even if required arguments are missing, still select the best tool.
-- If no tool matches, output: NO_MATCHING_TOOL"""
+- Always pick the most relevant tool if one exists. Prefer a tool over NO_MATCHING_TOOL when any tool is even partially relevant.
+- Only output NO_MATCHING_TOOL when truly no tool relates to the request."""
 
 
 def _select_tool(
