@@ -296,7 +296,7 @@ def test_agent_loop():
 def test_agent_replan():
     """Test replan loop: fake runner returns unsatisfied → agent excludes and retries."""
     from agent_connector.agent import (
-        agent_loop, DONE, TOOL_NOT_APPLICABLE, validate_result,
+        agent_loop, DONE, NEED_USER_INPUT, TOOL_NOT_APPLICABLE,
     )
     from openai import OpenAI as OAI
     registry_path = os.path.join(os.path.dirname(__file__), "data", "mcp_registry.yaml")
@@ -309,7 +309,6 @@ def test_agent_replan():
     call_count = [0]
     def fake_runner_first_fail(spec, args, timeout=300):
         call_count[0] += 1
-        tool = spec.get("name", "")
         if call_count[0] == 1:
             # first attempt: return something that doesn't satisfy the query
             return {"return_code": 0, "status": "ok",
@@ -318,7 +317,8 @@ def test_agent_replan():
         return {"return_code": 0, "status": "ok",
                 "stdout": "species: Lactobacillus, Bifidobacterium, Escherichia\n"}
 
-    query = "Identify metagenomic species from ONT reads"
+    # explicit file path so arg extraction succeeds
+    query = "Identify metagenomic species from /data/reads.fastq using ONT reads"
     call_count[0] = 0
     r1 = agent_loop(query, graph, all_schemas, fnmap, client, MODEL,
                      runner_fn=fake_runner_first_fail)
