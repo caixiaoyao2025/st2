@@ -1,0 +1,160 @@
+name: Deep Tool Discovery (full scan)
+
+on:
+  workflow_dispatch:       # 手动触发
+    inputs:
+      verify_only:
+        description: 'Only run step3.5 verify on the existing tool library (skip discover/execute)'
+        type: boolean
+        default: false
+      verify_target:
+        description: 'Path to tool library to verify (default tool_library_clean.json)'
+        type: string
+        default: 'tool_library_clean.json'
+      max_tools:
+        description: 'Max tools to run through execute test (0 = all)'
+        type: number
+        default: 60
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          # use default PyPI (GH runners are in the US; the tsinghua mirror can
+          # be unreachable from there and breaks pip install)
+          pip install --quiet requests beautifulsoup4 pyyaml
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git build-essential gcc g++ make \
+            libhts-dev libcurl4-openssl-dev libssl-dev zlib1g-dev libbz2-dev \
+            liblzma-dev >/dev/null 2>&1 || true
+          pip install --quiet playwright openai
+          python -m playwright install --with-deps chromium >/dev/null 2>&1 || true
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          auto-update-conda: true
+          activate-environment: test
+          channels: conda-forge,bioconda,defaults
+
+      - name: Configure conda mirror
+        run: |
+          conda config --add channels conda-forge
+          conda config --add channels bioconda
+          conda config --set channel_priority strict
+          conda config --set show_channel_urls true
+
+      - name: Install R (conda-forge) for R-package tools
+        run: |
+          conda install -y -c conda-forge r-base >/dev/null 2>&1 || \
+            conda install -y r-base >/dev/null 2>&1 || echo "R install skipped/failed"
+          which R || echo "R not on PATH"
+          R --version 2>/dev/null | head -1 || true
+
+      - name: Discover tools (30 papers per keyword)
+        if: ${{ !inputs.verify_only }}
+        run: python multi_search.py
+        env:
+          PYTHONIOENCODING: utf-8
+          NEW_PER_QUERY: "30"          # collect up to 30 new papers per keyword
+          MAX_TOTAL_PER_QUERY: "200"   # scan up to 200 papers per keyword
+        timeout-minutes: 120
+
+      - name: Convert + clean
+        if: ${{ !inputs.verify_only }}
+        run: |
+          python -c "from run_pipeline import step2_convert, step3_clean; step2_convert(); step3_clean()"
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Verify + execute test (step 3.5 + 3.6)
+        run: |
+          python -c "from run_pipeline import step3_5_verify, step3_6_execute; step3_5_verify(); step3_6_execute()"
+        env:
+          PYTHONIOENCODING: utf-8
+          MAX_TOOLS: ${{ inputs.max_tools }}
+        timeout-minutes: 180
+
+      - name: Registry + MCP merge
+        run: |
+          python -c "from run_pipeline import step4_to_registry, step5_register_to_mcp; step4_to_registry(); step5_register_to_mcp()"
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Registry pipeline test (schema -> render -> execute -> output)
+        continue-on-error: true   # schema/render failures must not block commit
+        env:
+          PYTHONIOENCODING: utf-8
+          REGISTRY: data/mcp_registry.yaml
+          PIPELINE_JSON: data/registry_pipeline.json
+        run: |
+          python registry_pipeline_test.py || echo "pipeline test reported failures (see data/registry_pipeline.json)"
+        timeout-minutes: 30
+
+      - name: PREFLIGHT gate (registry contract, NO LLM)
+        # Hard gate BEFORE the LLM test: if the registry still contains
+        # placeholder/zombie entries or subcommand tools without complete
+        # details, STOP here (exit 1) instead of burning 20 minutes of agent
+        # calls on a broken schema. Prints exactly which gate/tool failed.
+        env:
+          PYTHONIOENCODING: utf-8
+          REGISTRY: data/mcp_registry.yaml
+        run: python preflight_check.py
+
+      - name: Test agent can use discovered tools (volcengine LLM)
+        continue-on-error: true   # a failed agent test must NOT block committing the registry
+        env:
+          PYTHONIOENCODING: utf-8
+          WESTLAKE_API_KEY: ${{ secrets.WESTLAKE_API_KEY }}
+          WESTLAKE_BASE_URL: ${{ secrets.WESTLAKE_BASE_URL }}
+          WESTLAKE_MODEL: ${{ secrets.WESTLAKE_MODEL }}
+          REGISTRY: data/mcp_registry.yaml
+        # `python -u`: unbuffered stdout so the runner streams progress in
+        # real time (a timeout mid-run must show HOW FAR it got, not a blank log).
+        # Per-call tool timeout is capped inside tool_agent_test.py
+        # (AGENT_CALL_TIMEOUT=240s) so a hung tool can't burn 600s per call.
+        run: python -u tool_agent_test.py
+        timeout-minutes: 60
+
+      - name: Commit and push results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # -f: force-add outputs that .gitignore may exclude (data/* etc.)
+          git add -f github_from_html.json tool_library.json tool_library_clean.json discovered_registry.yaml tool_verification.json tool_execution.json excluded_tools.json seen_papers.json data/mcp_registry.yaml data/registry_pipeline.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "auto: deep tool discovery $(date -u +%Y-%m-%d)"
+          # Rebase onto latest main; on conflicts keep this run's freshly generated data
+          # (in rebase, "theirs" = the commits being replayed, i.e. the auto-commit).
+          # Clean any unstaged modifications (e.g. from pipeline-generated files)
+          # that would block `git rebase` with "unstaged changes".
+          git checkout -- . 2>/dev/null || true
+          git clean -fd 2>/dev/null || true
+          pulled=0
+          for i in 1 2 3 4 5; do
+            git rebase --abort 2>/dev/null || true
+            if git fetch "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" main && git rebase -X theirs FETCH_HEAD; then
+              pulled=1
+              break
+            fi
+            git rebase --abort 2>/dev/null || true
+            echo "pull/rebase attempt $i failed, retrying..."
+            sleep 10
+          done
+          if [ "$pulled" != "1" ]; then
+            echo "rebase failed after retries; aborting to avoid pushing a broken tree"
+            git rebase --abort 2>/dev/null || true
+            exit 1
+          fi
+          git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" main
