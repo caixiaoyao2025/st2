@@ -36,8 +36,8 @@ MODEL = os.environ.get("WESTLAKE_MODEL", "deepseek-v4-flash-ga-260731")
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 
-_BASE_URL = os.environ.get("WESTLAKE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
-_API_KEY = os.environ.get("WESTLAKE_API_KEY", "")
+_BASE_URL = os.environ.get("WESTLAKE_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3"
+_API_KEY = os.environ.get("WESTLAKE_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
 
 # --- selection tasks: (user_task, expected_fn_name) ---
 # Each task is a natural language request that should map to exactly one
