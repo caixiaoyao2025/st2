@@ -24,9 +24,15 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install --quiet requests beautifulsoup4 pyyaml openai
+        run: pip install --quiet requests beautifulsoup4 pyyaml openai graph-tool-call
 
-      - name: Run tool selection test (retrieval_first)
+      - name: Run retrieval-only test
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -u test_tool_selection.py --retrieval-only
+        timeout-minutes: 5
+
+      - name: Run tool selection test (retrieval + LLM)
         env:
           PYTHONIOENCODING: utf-8
           WESTLAKE_API_KEY: ${{ secrets.WESTLAKE_API_KEY }}
