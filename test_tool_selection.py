@@ -293,6 +293,67 @@ def test_agent_loop():
     return failed
 
 
+def test_agent_replan():
+    """Test replan loop: fake runner returns unsatisfied → agent excludes and retries."""
+    from agent_connector.agent import (
+        agent_loop, DONE, TOOL_NOT_APPLICABLE, validate_result,
+    )
+    from openai import OpenAI as OAI
+    registry_path = os.path.join(os.path.dirname(__file__), "data", "mcp_registry.yaml")
+    graph = build_graph_from_registry(registry_path)
+    _, all_schemas, schema_by_name, fnmap = _load_schemas(registry_path)
+    client = OAI(base_url=BASE_URL, api_key=API_KEY)
+    print(f"== Agent replan test (fake runner) ==")
+
+    # Scenario 1: first tool always "not satisfied" → agent retries → picks another
+    call_count = [0]
+    def fake_runner_first_fail(spec, args, timeout=300):
+        call_count[0] += 1
+        tool = spec.get("name", "")
+        if call_count[0] == 1:
+            # first attempt: return something that doesn't satisfy the query
+            return {"return_code": 0, "status": "ok",
+                    "stdout": "metadata: record_count=100\nformat: BINSEQ\n"}
+        # second attempt: return something relevant
+        return {"return_code": 0, "status": "ok",
+                "stdout": "species: Lactobacillus, Bifidobacterium, Escherichia\n"}
+
+    query = "Identify metagenomic species from ONT reads"
+    call_count[0] = 0
+    r1 = agent_loop(query, graph, all_schemas, fnmap, client, MODEL,
+                     runner_fn=fake_runner_first_fail)
+    print(f"  Scenario 1 (replan): status={r1['status']} tool={r1['tool']} "
+          f"attempts={len(r1['attempts'])}")
+    tools_tried = [a["tool"] for a in r1["attempts"]]
+    print(f"    tools tried: {tools_tried}")
+    s1_ok = len(r1["attempts"]) >= 2 and r1["status"] == DONE
+    print(f"    [{'PASS' if s1_ok else 'FAIL'}] replan happened (>=2 attempts, DONE)")
+
+    # Scenario 2: all tools fail → exhaust retries → TOOL_NOT_APPLICABLE
+    def fake_runner_always_fail(spec, args, timeout=300):
+        return {"return_code": 1, "status": "error",
+                "stdout": "", "stderr": "tool error"}
+
+    r2 = agent_loop(query, graph, all_schemas, fnmap, client, MODEL,
+                     runner_fn=fake_runner_always_fail)
+    print(f"\n  Scenario 2 (all fail): status={r2['status']} attempts={len(r2['attempts'])}")
+    s2_ok = r2["status"] == TOOL_NOT_APPLICABLE
+    print(f"    [{'PASS' if s2_ok else 'FAIL'}] exhausted → TOOL_NOT_APPLICABLE")
+
+    # Scenario 3: argument extraction → NEED_USER_INPUT
+    r3 = agent_loop("Decode this BINSEQ file", graph, all_schemas, fnmap, client, MODEL,
+                     runner_fn=None)
+    print(f"\n  Scenario 3 (missing args): status={r3['status']} tool={r3['tool']} "
+          f"missing={r3.get('missing', [])}")
+    s3_ok = r3["status"] == NEED_USER_INPUT and r3["tool"] is not None
+    print(f"    [{'PASS' if s3_ok else 'FAIL'}] NEED_USER_INPUT with missing args")
+
+    total = 3
+    passed = sum([s1_ok, s2_ok, s3_ok])
+    print(f"\n  Replan test: {passed}/{total}")
+    return 0 if passed == total else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description="Tool selection test")
     parser.add_argument("--all-tools", action="store_true",
@@ -301,9 +362,13 @@ def main():
                         help="Test retrieval hit rate only (no LLM)")
     parser.add_argument("--agent", action="store_true",
                         help="Full agent loop (select → extract → validate)")
+    parser.add_argument("--replan", action="store_true",
+                        help="Agent replan test (fake runner, recovery loop)")
     args = parser.parse_args()
     if args.retrieval_only:
         return test_retrieval_only()
+    if args.replan:
+        return test_agent_replan()
     if args.agent:
         return test_agent_loop()
     if args.all_tools:

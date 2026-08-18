@@ -60,3 +60,12 @@ jobs:
           WESTLAKE_MODEL: ${{ secrets.WESTLAKE_MODEL }}
         run: python -u test_tool_selection.py --agent
         timeout-minutes: 15
+
+      - name: Run agent replan test (fake runner, recovery loop)
+        env:
+          PYTHONIOENCODING: utf-8
+          WESTLAKE_API_KEY: ${{ secrets.WESTLAKE_API_KEY }}
+          WESTLAKE_BASE_URL: ${{ secrets.WESTLAKE_BASE_URL }}
+          WESTLAKE_MODEL: ${{ secrets.WESTLAKE_MODEL }}
+        run: python -u test_tool_selection.py --replan
+        timeout-minutes: 15
