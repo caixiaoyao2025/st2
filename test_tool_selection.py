@@ -255,15 +255,57 @@ def test_selection_all_tools():
     return failed
 
 
+def test_agent_loop():
+    """Full agent loop: select → extract → validate → execute → result check."""
+    from agent_connector.agent import agent_loop, DONE, NEED_USER_INPUT, TOOL_NOT_APPLICABLE
+    from openai import OpenAI as OAI
+    registry_path = os.path.join(os.path.dirname(__file__), "data", "mcp_registry.yaml")
+    graph = build_graph_from_registry(registry_path)
+    _, all_schemas, schema_by_name, fnmap = _load_schemas(registry_path)
+    client = OAI(base_url=BASE_URL, api_key=API_KEY)
+    print(f"== Agent loop test (selection only, no execution): {len(all_schemas)} schemas ==")
+    passed = 0
+    failed = 0
+    neg_correct = 0
+    neg_total = 0
+    for task, expected in SELECTION_TASKS:
+        result = agent_loop(task, graph, all_schemas, fnmap, client, MODEL, runner_fn=None)
+        got = result["tool"]
+        status = result["status"]
+        if expected is None:
+            neg_total += 1
+            if status == TOOL_NOT_APPLICABLE and got is None:
+                neg_correct += 1
+                print(f"  [PASS] [NEG] {task[:50]}... -> NO_MATCHING_TOOL")
+            else:
+                print(f"  [FAIL] [NEG] {task[:50]}... -> got={got} status={status}")
+            continue
+        if got == expected:
+            passed += 1
+            print(f"  [PASS] {task[:50]}... -> {got} (status={status})")
+        else:
+            failed += 1
+            print(f"  [FAIL] {task[:50]}...")
+            print(f"         expected={expected}  got={got}  status={status}")
+            print(f"         attempts={[a['tool'] for a in result['attempts']]}")
+    print(f"\n  Passed: {passed}/{len(SELECTION_TASKS)}, Failed: {failed}")
+    print(f"  no_match_correct: {neg_correct}/{neg_total}")
+    return failed
+
+
 def main():
     parser = argparse.ArgumentParser(description="Tool selection test")
     parser.add_argument("--all-tools", action="store_true",
                         help="LLM sees ALL schemas (no retrieval)")
     parser.add_argument("--retrieval-only", action="store_true",
                         help="Test retrieval hit rate only (no LLM)")
+    parser.add_argument("--agent", action="store_true",
+                        help="Full agent loop (select → extract → validate)")
     args = parser.parse_args()
     if args.retrieval_only:
         return test_retrieval_only()
+    if args.agent:
+        return test_agent_loop()
     if args.all_tools:
         return test_selection_all_tools()
     return test_selection_retrieval_first()
