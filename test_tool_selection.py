@@ -89,7 +89,8 @@ Rules:
 - Only output NO_MATCHING_TOOL when truly no tool relates to the request."""
 
 
-def _llm_select(task: str, candidates: list[str], retries: int = MAX_RETRIES):
+def _llm_select(task: str, candidates: list[str], retries: int = MAX_RETRIES,
+                tool_descriptions: dict[str, str] | None = None):
     """Send task + candidate list to LLM, return selected tool name or None.
 
     Uses plain text completion (not tool_call) to enforce strict output.
@@ -98,7 +99,13 @@ def _llm_select(task: str, candidates: list[str], retries: int = MAX_RETRIES):
     if not API_KEY:
         raise RuntimeError("Missing API key")
     client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-    numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(candidates))
+    if tool_descriptions:
+        numbered = "\n".join(
+            f"{i+1}. {c}: {tool_descriptions.get(c, '')}"
+            for i, c in enumerate(candidates)
+        )
+    else:
+        numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(candidates))
     user_msg = f"User request:\n{task}\n\nCandidate tools:\n{numbered}\n\nSelect the best tool:"
     messages = [
         {"role": "system", "content": SELECTOR_SYSTEM},
@@ -225,17 +232,20 @@ def test_selection_retrieval_first():
 
 
 def test_selection_all_tools():
-    """Layer 3: LLM sees ALL tool names, no retrieval."""
+    """Layer 3: LLM sees ALL tool names + descriptions, no retrieval."""
     registry_path = os.path.join(os.path.dirname(__file__), "data", "mcp_registry.yaml")
     _, all_schemas, schema_by_name, fnmap = _load_schemas(registry_path)
     all_names = list(schema_by_name.keys())
+    # Build name→description map so the selector prompt includes descriptions
+    tool_descs = {s["function"]["name"]: s["function"].get("description", "")
+                  for s in all_schemas}
     print(f"== Selection test (all_tools): {len(all_names)} total tools ==")
     passed = 0
     failed = 0
     neg_correct = 0
     neg_total = 0
     for task, expected in SELECTION_TASKS:
-        got = _llm_select(task, all_names)
+        got = _llm_select(task, all_names, tool_descriptions=tool_descs)
         if expected is None:
             neg_total += 1
             if got is None:

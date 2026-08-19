@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'test_tool_selection.py'
+      - 'test_cross_agent.py'
       - 'agent_connector/**'
       - 'tool_agent_test.py'
       - 'data/mcp_registry.yaml'
@@ -32,6 +33,12 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python -u test_tool_selection.py --retrieval-only
+        timeout-minutes: 5
+
+      - name: Run cross-agent adapter test (no LLM)
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -u test_cross_agent.py
         timeout-minutes: 5
 
       - name: Run tool selection test (retrieval + LLM)

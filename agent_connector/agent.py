@@ -186,6 +186,8 @@ def agent_loop(
         }
     """
     candidates_all = [s["function"]["name"] for s in schemas]
+    tool_descs = {s["function"]["name"]: s["function"].get("description", "")
+                  for s in schemas}
     attempts = []
     excluded = set()
 
@@ -208,7 +210,7 @@ def agent_loop(
             }
 
         # 2. Select tool (text-based)
-        _sel = selector_fn or (lambda q, c: _select_tool(q, c, client, model))
+        _sel = selector_fn or (lambda q, c: _select_tool(q, c, client, model, tool_descs))
         tool_name = _sel(query, candidate_names)
         if tool_name is None:
             return {
@@ -324,10 +326,17 @@ Rules:
 
 
 def _select_tool(
-    query: str, candidates: list[str], client: OpenAI, model: str
+    query: str, candidates: list[str], client: OpenAI, model: str,
+    tool_descs: dict[str, str] | None = None,
 ) -> str | None:
     """Select the best tool from candidates. Returns tool name or None."""
-    numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(candidates))
+    if tool_descs:
+        numbered = "\n".join(
+            f"{i+1}. {c}: {tool_descs.get(c, '')}"
+            for i, c in enumerate(candidates)
+        )
+    else:
+        numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(candidates))
     user_msg = f"User request:\n{query}\n\nCandidate tools:\n{numbered}\n\nSelect the best tool:"
     resp = client.chat.completions.create(
         model=model,
