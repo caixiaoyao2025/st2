@@ -9,6 +9,7 @@ on:
       - 'agent_connector/**'
       - 'tool_agent_test.py'
       - 'data/mcp_registry.yaml'
+      - '.github/workflows/tool_selection_test.yml'
 
 permissions:
   contents: read
