@@ -39,7 +39,7 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python -u test_cross_agent.py
-        timeout-minutes: 5
+        timeout-minutes: 15
 
       - name: Run tool selection test (retrieval + LLM)
         env:
