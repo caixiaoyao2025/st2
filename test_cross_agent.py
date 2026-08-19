@@ -883,7 +883,12 @@ def test_crisprgpt_inject():
     os.environ.setdefault("OPENAI_API_KEY", "sk-dummy-for-import-only")
     if CRISPRGPT_DIR not in sys.path:
         sys.path.insert(0, CRISPRGPT_DIR)
-    from crisprgpt.logic import BaseState, Result_ProcessUserInput
+    try:
+        from crisprgpt.logic import BaseState, Result_ProcessUserInput
+    except ImportError as e:
+        print(f"    import failed: {e}")
+        print("  [SKIP] CRISPR-GPT not importable (missing langchain_openai?)")
+        return
 
     # CRISPR-GPT registers tools as BaseState subclasses in a task_list
     # Our prompt block describes tools → create a BaseState for each

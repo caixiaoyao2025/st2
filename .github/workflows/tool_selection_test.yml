@@ -28,6 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install requests beautifulsoup4 pyyaml openai graph-tool-call
+          pip install pandas langchain-openai
           python -c "import graph_tool_call; print('graph-tool-call OK')"
 
       - name: Run retrieval-only test
