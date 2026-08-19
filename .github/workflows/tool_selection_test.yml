@@ -35,9 +35,12 @@ jobs:
         run: python -u test_tool_selection.py --retrieval-only
         timeout-minutes: 5
 
-      - name: Run cross-agent adapter test (no LLM)
+      - name: Run cross-agent adapter test (no LLM) + Biomni real agent
         env:
           PYTHONIOENCODING: utf-8
+          WESTLAKE_API_KEY: ${{ secrets.WESTLAKE_API_KEY }}
+          WESTLAKE_BASE_URL: ${{ secrets.WESTLAKE_BASE_URL }}
+          WESTLAKE_MODEL: ${{ secrets.WESTLAKE_MODEL }}
         run: python -u test_cross_agent.py
         timeout-minutes: 15
 
