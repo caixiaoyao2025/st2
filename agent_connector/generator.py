@@ -171,6 +171,19 @@ class {adapter_class}:
         mod = _importlib.import_module(self._agent_class_path)
         cls = getattr(mod, self._agent_class_name)
         kwargs = dict(self._init_defaults)
+        # Auto-create LLM client from env vars if param exists but is None
+        import os
+        llm_params = [k for k in kwargs if k.lower() in ("llm", "client", "model", "llm_client")]
+        for lp in llm_params:
+            if kwargs.get(lp) is None:
+                try:
+                    from openai import OpenAI
+                    kwargs[lp] = OpenAI(
+                        api_key=os.environ.get("OPENAI_API_KEY"),
+                        base_url=os.environ.get("OPENAI_BASE_URL"),
+                    )
+                except Exception:
+                    pass
         kwargs.update(overrides)
         self.agent = cls(**kwargs) if kwargs else cls()
         return self.agent
