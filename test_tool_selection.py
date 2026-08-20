@@ -36,7 +36,7 @@ API_KEY = (
     or os.environ.get("DEEPSEEK_API_KEY")
     or ""
 )
-MODEL = os.environ.get("WESTLAKE_MODEL") or os.environ.get("OPENAI_MODEL") or os.environ.get("DEEPSEEK_MODEL") or "deepseek-v4-flash-ga-260731"
+MODEL = os.environ.get("WESTLAKE_MODEL") or os.environ.get("OPENAI_MODEL") or os.environ.get("DEEPSEEK_MODEL") or "glm-5-2-260617"
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 

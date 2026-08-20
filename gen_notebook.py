@@ -75,7 +75,7 @@ code([
     "    value='', placeholder='ark-... or sk-...',\n",
     "    description='API Key:', layout=widgets.Layout(width='90%'))\n",
     "model_input = widgets.Text(\n",
-    "    value='deepseek-v4-flash-ga-260731',\n",
+    "    value='glm-5-2-260617',\n",
     "    description='Model:', layout=widgets.Layout(width='70%'))\n",
     "base_input = widgets.Text(\n",
     "    value='https://ark.cn-beijing.volces.com/api/v3',\n",
