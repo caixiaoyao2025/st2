@@ -172,7 +172,7 @@ class {adapter_class}:
         cls = getattr(mod, self._agent_class_name)
         kwargs = dict(self._init_defaults)
         # Auto-fill LLM-related params from env vars
-        import os
+        import os, inspect
         _model = os.environ.get("OPENAI_MODEL", "")
         _api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("WESTLAKE_API_KEY")
         _base_url = os.environ.get("OPENAI_BASE_URL", "")
@@ -186,6 +186,13 @@ class {adapter_class}:
                 kwargs[k] = _base_url
             elif kl == "source" and not kwargs[k]:
                 kwargs[k] = "Custom"
+        # Only keep params the constructor actually accepts
+        try:
+            sig = inspect.signature(cls.__init__)
+            valid = set(sig.parameters.keys()) - {"self"}
+            kwargs = {k: v for k, v in kwargs.items() if k in valid}
+        except (ValueError, TypeError):
+            pass
         kwargs.update(overrides)
         self.agent = cls(**kwargs) if kwargs else cls()
         return self.agent
