@@ -1,34 +1,33 @@
-{
- "nbformat": 4,
- "nbformat_minor": 0,
- "metadata": {
-  "colab": {
-   "provenance": []
-  },
-  "kernelspec": {
-   "name": "python3",
-   "display_name": "Python 3"
-  },
-  "language_info": {
-   "name": "python"
-  }
- },
- "cells": [
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
+import json
+
+nb = {
+    "nbformat": 4,
+    "nbformat_minor": 0,
+    "metadata": {
+        "colab": {"provenance": []},
+        "kernelspec": {"name": "python3", "display_name": "Python 3"},
+        "language_info": {"name": "python"}
+    },
+    "cells": []
+}
+
+def md(src):
+    nb["cells"].append({"cell_type": "markdown", "metadata": {}, "source": src})
+
+def code(src):
+    nb["cells"].append({"cell_type": "code", "metadata": {}, "source": src, "execution_count": None, "outputs": []})
+
+# Title
+md([
     "# Tool-Discovery Agent\n",
     "\n",
     "Discover bioinformatics tools from papers, inject them into your agent, and run tasks.\n",
     "\n",
     "**Flow:** Scan agent -> Inject tools -> Run tasks via downstream agent"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+
+# Step 0
+code([
     "import os, sys, subprocess\n",
     "if not os.path.exists('/content/st2/agent_connector'):\n",
     "    subprocess.run(['git', 'clone', '--depth', '1',\n",
@@ -39,21 +38,11 @@
     "!pip install -q langchain langchain-openai langgraph pydantic graph-tool-call 2>/dev/null || true\n",
     "from IPython.display import display, Markdown\n",
     "display(Markdown('**Setup done**'))"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## Step 1 - Input your agent & API key"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+
+# Step 1 - with widgets AND known agents dict
+md(["## Step 1 - Input your agent & API key"])
+code([
     "import os, subprocess\n",
     "from IPython.display import display, Markdown\n",
     "import ipywidgets as widgets\n",
@@ -122,21 +111,11 @@
     "\n",
     "btn.on_click(on_connect)\n",
     "display(widgets.VBox([path_input, key_input, model_input, base_input, btn, out]))"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## Step 2 - Scan agent & detect wiring"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+
+# Step 2
+md(["## Step 2 - Scan agent & detect wiring"])
+code([
     "import os, sys, json\n",
     "from IPython.display import display, Markdown\n",
     "import yaml\n",
@@ -157,21 +136,11 @@
     "reg_path = os.path.join(ST2_DIR, 'data', 'mcp_registry.yaml')\n",
     "tools = yaml.safe_load(open(reg_path, encoding='utf-8'))['tools']\n",
     "display(Markdown(f'**Registry:** {len(tools)} tools'))"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## Step 3 - Resolve execution method"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+
+# Step 3
+md(["## Step 3 - Resolve execution method"])
+code([
     "from IPython.display import display, Markdown\n",
     "\n",
     "agent_class = (schema.get('agent_class') or '').lower()\n",
@@ -206,35 +175,19 @@
     "    display(Markdown('**No signal found.** Defaulting to `run`.'))\n",
     "\n",
     "get_ipython().user_ns['exec_method_override'] = exec_method"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## Step 4 - Preflight check & install"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+
+# Step 4
+md(["## Step 4 - Preflight check & install"])
+code([
     "import os\n",
     "from IPython.display import display, Markdown\n",
     "from agent_connector.agent_preflight import preflight, preflight_report\n",
     "\n",
     "pf = preflight(agent_dir)\n",
     "display(Markdown(preflight_report(pf)))"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+code([
     "import subprocess, os, sys\n",
     "from IPython.display import display, Markdown\n",
     "\n",
@@ -249,21 +202,11 @@
     "        display(Markdown('No auto-installable packages'))\n",
     "else:\n",
     "    display(Markdown(f'Status = `{pf.status}`'))"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## Step 5 - Create agent & inject tools"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+
+# Step 5
+md(["## Step 5 - Create agent & inject tools"])
+code([
     "import os, sys, json, importlib\n",
     "from IPython.display import display, Markdown\n",
     "\n",
@@ -331,23 +274,15 @@
     "get_ipython().user_ns['agent'] = agent\n",
     "get_ipython().user_ns['wrappers'] = wrappers\n",
     "get_ipython().user_ns['adapter'] = adapter"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
+])
+
+# Step 5b
+md([
     "## Step 5b - Manual agent init (only if Step 5 failed)\n",
     "\n",
     "If Step 5 succeeded, **skip this cell**."
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+code([
     "from IPython.display import display, Markdown\n",
     "import ipywidgets as widgets\n",
     "\n",
@@ -397,23 +332,15 @@
     "\n",
     "    apply_btn.on_click(on_apply)\n",
     "    display(widgets.VBox([code_area, method_input, apply_btn, out]))"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
+])
+
+# Step 6
+md([
     "## Step 6 - Run tasks via downstream agent\n",
     "\n",
     "Your query is sent to the agent via `agent.{method}(query)`. The agent uses the injected tools internally."
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+])
+code([
     "from IPython.display import display, Markdown\n",
     "import ipywidgets as widgets\n",
     "import time\n",
@@ -458,9 +385,9 @@
     "\n",
     "run_btn.on_click(run_query)\n",
     "display(widgets.VBox([query_input, run_btn, result_out]))"
-   ],
-   "execution_count": null,
-   "outputs": []
-  }
- ]
-}
+])
+
+with open('interactive_agent.ipynb', 'w', encoding='utf-8') as f:
+    json.dump(nb, f, indent=1, ensure_ascii=False)
+
+print(f"Done: {len(nb['cells'])} cells")

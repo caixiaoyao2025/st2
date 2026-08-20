@@ -364,6 +364,68 @@ def probe_execution_method(agent_obj: object, candidates: list[str] | None = Non
     return None
 
 
+# --- import path + constructor extraction --------------------------------
+
+_IMPORT_RE = re.compile(
+    r"^\s*from\s+([\w.]+)\s+import\s+(\w+)", re.MULTILINE
+)
+
+
+def find_import_paths(model: RepoModel) -> dict[str, str]:
+    """Scan all source for 'from X import Y' and return {ClassName: module_path}.
+
+    Only returns entries where Y matches a class found in the AST.
+    E.g. {'A1': 'biomni.agent.A1'} from 'from biomni.agent.A1 import A1'.
+    """
+    class_names = {cls.name for cls in model.classes}
+    result: dict[str, str] = {}
+    for file in model.files:
+        try:
+            text = Path(file).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in _IMPORT_RE.finditer(text):
+            module_path, class_name = match.group(1), match.group(2)
+            if class_name in class_names:
+                result[class_name] = module_path
+    return result
+
+
+def find_init_signatures(model: RepoModel) -> dict[str, dict[str, Any]]:
+    """Extract __init__ signatures for agent classes.
+
+    Returns {class_name: {'params': [...], 'defaults': {...}, 'file': str}}.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    for info in model.methods:
+        if info.name != "__init__":
+            continue
+        if not info.class_name:
+            continue
+        node = info.node
+        defaults: dict[str, Any] = {}
+        params: list[str] = []
+        for arg in node.args.args:
+            if arg.arg in ("self", "cls"):
+                continue
+            params.append(arg.arg)
+        # defaults are aligned to the end of args
+        num_defaults = len(node.args.defaults)
+        if num_defaults > 0:
+            defaulted_params = params[-num_defaults:]
+            for pname, dnode in zip(defaulted_params, node.args.defaults):
+                try:
+                    defaults[pname] = ast.literal_eval(dnode)
+                except (ValueError, TypeError):
+                    defaults[pname] = None
+        result[info.class_name] = {
+            "params": params,
+            "defaults": defaults,
+            "file": info.file,
+        }
+    return result
+
+
 def build_schema(
     repo_path: str,
     *,
@@ -418,10 +480,16 @@ def build_schema(
     # Determine the agent/executor class name (where best candidates live).
     agent_class = best_reg.get("class_name") if best_reg else (best_exec.get("class_name") if best_exec else None)
 
+    # Extract import paths and init signatures
+    import_paths = find_import_paths(model)
+    init_sigs = find_init_signatures(model)
+
     schema: dict[str, Any] = {
         "repo_path": str(Path(repo_path).resolve()),
         "wiring_style": detect_wiring_style(repo_path, best_reg["name"] if best_reg else None),
         "agent_class": agent_class,
+        "module_path": import_paths.get(agent_class) if agent_class else None,
+        "init_signature": init_sigs.get(agent_class) if agent_class else None,
         "registration_method": best_reg["name"] if best_reg else None,
         "registration_argument": (
             best_reg["tool_param_candidates"][0] if best_reg and best_reg["tool_param_candidates"] else None

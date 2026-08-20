@@ -161,14 +161,17 @@ class {adapter_class}:
         self._agent_class_name = agent_class_name
         self._reg_method = "{registration_method}"
         self._exec_method = "{execution_method}"
+        self._init_defaults = {init_defaults}
         self.agent = agent
 
     # -- lifecycle -----------------------------------------------------------
 
-    def create_agent(self, **kwargs):
-        """Import the agent class and instantiate it."""
+    def create_agent(self, **overrides):
+        """Import the agent class and instantiate it with detected defaults."""
         mod = _importlib.import_module(self._agent_class_path)
         cls = getattr(mod, self._agent_class_name)
+        kwargs = dict(self._init_defaults)
+        kwargs.update(overrides)
         self.agent = cls(**kwargs) if kwargs else cls()
         return self.agent
 
@@ -199,6 +202,7 @@ def generate_adapter(
     registration_method: str,
     execution_method: str = "run",
     module_path: str = "",
+    init_defaults: dict | None = None,
     out_path: str = "adapter.py",
 ) -> str:
     """Write the adapter module and return its path."""
@@ -208,6 +212,7 @@ def generate_adapter(
         registration_method=_safe_identifier(registration_method),
         execution_method=_safe_identifier(execution_method),
         module_path=module_path or "",
+        init_defaults=repr(init_defaults or {}),
     )
     Path(out_path).write_text(code, encoding="utf-8")
     return out_path
@@ -430,7 +435,8 @@ def generate_wiring(
             schema.get("agent_class") or "Agent",
             schema["registration_method"],
             execution_method=schema.get("execution_method") or DEFAULT_EXECUTION_METHOD,
-            module_path=schema.get("module") or "",
+            module_path=schema.get("module_path") or "",
+            init_defaults=schema.get("init_signature", {}).get("defaults") if schema.get("init_signature") else None,
             out_path=os.path.join(out_dir, "adapter.py"),
         )
         artifacts["adapter"] = adapter_path
