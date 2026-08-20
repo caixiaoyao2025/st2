@@ -269,7 +269,7 @@ def load_adapter(agent_class: str, adapter_path: str = "adapter.py") -> Any:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
-    return getattr(module, make_adapter_class_name(agent_class))
+    return getattr(module, make_adapter_class_name(agent_class))()
 
 
 # --- fallback wiring for agents with no register method -------------------
