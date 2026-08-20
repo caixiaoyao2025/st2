@@ -171,13 +171,38 @@ class $adapter_class:
 
     def create_agent(self, **overrides):
         """Import the agent class and instantiate it with detected defaults."""
-        mod = _importlib.import_module(self._agent_class_path)
-        cls = getattr(mod, self._agent_class_name)
-        kwargs = dict(self._init_defaults)
         import os, inspect
         _model = os.environ.get("OPENAI_MODEL", "")
         _api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("WESTLAKE_API_KEY")
         _base_url = os.environ.get("OPENAI_BASE_URL", "")
+
+        # --- Set BIOMNI env vars BEFORE importing so default_config picks them up ---
+        if _model and not os.environ.get("BIOMNI_LLM"):
+            os.environ["BIOMNI_LLM"] = _model
+        if _api_key and not os.environ.get("BIOMNI_CUSTOM_API_KEY"):
+            os.environ["BIOMNI_CUSTOM_API_KEY"] = _api_key
+        if _base_url and not os.environ.get("BIOMNI_CUSTOM_BASE_URL"):
+            os.environ["BIOMNI_CUSTOM_BASE_URL"] = _base_url
+        if not os.environ.get("BIOMNI_SOURCE"):
+            os.environ["BIOMNI_SOURCE"] = "Custom"
+
+        mod = _importlib.import_module(self._agent_class_path)
+        cls = getattr(mod, self._agent_class_name)
+
+        # --- Monkey-patch default_config in case it was created before env vars ---
+        try:
+            from biomni.config import default_config as _dc
+            if _model:
+                _dc.llm = _model
+            if _base_url:
+                _dc.base_url = _base_url
+            if _api_key:
+                _dc.api_key = _api_key
+            _dc.source = "Custom"
+        except Exception:
+            pass
+
+        kwargs = dict(self._init_defaults)
         for k in list(kwargs):
             kl = k.lower()
             if kl in ("llm", "model") and not kwargs[k]:
