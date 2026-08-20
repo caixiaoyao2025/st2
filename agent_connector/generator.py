@@ -145,23 +145,26 @@ def _safe_identifier(name: str) -> str:
     return cleaned
 
 
-ADAPTER_TEMPLATE = '''"""Auto-generated adapter for agent class: {agent_class}"""
+from string import Template
+
+
+ADAPTER_TEMPLATE = Template('''"""Auto-generated adapter for agent class: $agent_class"""
 import importlib as _importlib
 
 
-class {adapter_class}:
+class $adapter_class:
     """Unified adapter: create_agent / register_tools / run.
 
     Auto-generated from the agent's source code.  The execution entrypoint
-    ({execution_method}) was detected by scanner.py.
+    ($execution_method) was detected by scanner.py.
     """
 
-    def __init__(self, agent=None, agent_class_path="{module_path}", agent_class_name="{agent_class}"):
+    def __init__(self, agent=None, agent_class_path="$module_path", agent_class_name="$agent_class"):
         self._agent_class_path = agent_class_path
         self._agent_class_name = agent_class_name
-        self._reg_method = "{registration_method}"
-        self._exec_method = "{execution_method}"
-        self._init_defaults = {init_defaults}
+        self._reg_method = "$registration_method"
+        self._exec_method = "$execution_method"
+        self._init_defaults = $init_defaults
         self.agent = agent
 
     # -- lifecycle -----------------------------------------------------------
@@ -171,7 +174,6 @@ class {adapter_class}:
         mod = _importlib.import_module(self._agent_class_path)
         cls = getattr(mod, self._agent_class_name)
         kwargs = dict(self._init_defaults)
-        # Auto-fill LLM-related params from env vars
         import os, inspect
         _model = os.environ.get("OPENAI_MODEL", "")
         _api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("WESTLAKE_API_KEY")
@@ -186,7 +188,6 @@ class {adapter_class}:
                 kwargs[k] = _base_url
             elif kl == "source" and not kwargs[k]:
                 kwargs[k] = "Custom"
-        # Only keep params the constructor actually accepts
         try:
             sig = inspect.signature(cls.__init__)
             valid = set(sig.parameters.keys()) - {"self"}
@@ -212,7 +213,7 @@ class {adapter_class}:
         """Execute the agent with a prompt via its detected entrypoint."""
         target = agent or self.agent
         return getattr(target, self._exec_method)(prompt)
-'''
+''')
 
 
 def make_adapter_class_name(agent_class: str) -> str:
@@ -228,7 +229,7 @@ def generate_adapter(
     out_path: str = "adapter.py",
 ) -> str:
     """Write the adapter module and return its path."""
-    code = ADAPTER_TEMPLATE.format(
+    code = ADAPTER_TEMPLATE.safe_substitute(
         agent_class=agent_class,
         adapter_class=make_adapter_class_name(agent_class),
         registration_method=_safe_identifier(registration_method),
