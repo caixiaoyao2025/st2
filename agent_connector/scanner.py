@@ -484,11 +484,34 @@ def build_schema(
     import_paths = find_import_paths(model)
     init_sigs = find_init_signatures(model)
 
+    # Fallback: derive module_path from agent class file location
+    def _file_to_module(filepath: str) -> str | None:
+        """Convert e.g. /repo/biomni/agent/react.py -> biomni.agent.react"""
+        try:
+            rel = os.path.relpath(filepath, model.repo_path)
+        except ValueError:
+            return None
+        parts = Path(rel).with_suffix("").parts
+        if len(parts) < 2:
+            return None
+        # skip __init__ parts
+        parts = [p for p in parts if p != "__init__"]
+        return ".".join(parts) if parts else None
+
+    module_path = import_paths.get(agent_class) if agent_class else None
+    if not module_path and agent_class:
+        # Try from registration file
+        if best_reg and best_reg.get("file"):
+            module_path = _file_to_module(best_reg["file"])
+        # Try from init signature file
+        if not module_path and agent_class in init_sigs:
+            module_path = _file_to_module(init_sigs[agent_class].get("file", ""))
+
     schema: dict[str, Any] = {
         "repo_path": str(Path(repo_path).resolve()),
         "wiring_style": detect_wiring_style(repo_path, best_reg["name"] if best_reg else None),
         "agent_class": agent_class,
-        "module_path": import_paths.get(agent_class) if agent_class else None,
+        "module_path": module_path,
         "init_signature": init_sigs.get(agent_class) if agent_class else None,
         "registration_method": best_reg["name"] if best_reg else None,
         "registration_argument": (
