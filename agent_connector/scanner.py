@@ -22,6 +22,26 @@ REGISTRATION_HINTS = ("register", "add_tool", "add_mcp", "install", "attach", "a
 TOOL_NAME_HINTS = ("tool", "function", "action", "skill", "api", "mcp", "plugin")
 EXECUTION_METHOD_HINTS = ("run", "execute", "call", "invoke", "use", "apply", "go", "__call__")
 TOOL_SCHEMA_FIELDS = ("name", "description", "command", "parameters", "input_schema", "schema")
+
+# Known agent frameworks → execution method (key = lowercase substring in class/module path)
+KNOWN_AGENT_EXECUTION: dict[str, str] = {
+    "biomni": "go",
+    "cellagent": "run",
+    "geneagent": "run",
+    "crispr": "run",
+    "biochatter": "run",
+    "langchain": "invoke",
+    "autogpt": "run",
+    "crewai": "kickoff",
+    "metagpt": "run",
+    "camel": "step",
+    "openai": "run",
+    "smolagents": "run",
+    "dspy": "forward",
+}
+
+# Probe order for unknown agents (try these method names in order)
+_PROBE_ORDER = ("go", "run", "execute", "predict", "forward", "invoke")
 SKIP_DIR_PARTS = {
     ".git",
     ".venv",
@@ -305,6 +325,43 @@ def detect_execution_method(files: list[str]) -> tuple[str | None, int, str | No
         return None, 0, None
     method, count = max(counts.items(), key=lambda item: item[1])
     return method, count, example_file.get(method)
+
+
+def resolve_execution_method(
+    agent_class: str | None,
+    module_path: str | None,
+    scanned_source: str = "",
+) -> str:
+    """Determine execution method: known mapping → source hint → probe order.
+
+    Priority:
+      1. KNOWN_AGENT_EXECUTION match (class/module name substring)
+      2. Source code evidence (`.go(`, `.run(` etc.)
+      3. Fallback: first of _PROBE_ORDER
+    """
+    lookup = f"{(agent_class or '').lower()} {(module_path or '').lower()}"
+    for pattern, method in KNOWN_AGENT_EXECUTION.items():
+        if pattern in lookup:
+            return method
+    if scanned_source:
+        for m in ("go", "run", "execute", "predict", "forward", "invoke"):
+            if f".{m}(" in scanned_source:
+                return m
+    return _PROBE_ORDER[0]
+
+
+def probe_execution_method(agent_obj: object, candidates: list[str] | None = None) -> str | None:
+    """Runtime probe: check which execution method the agent object actually has.
+
+    Tries candidates in order, returns the first method name that is callable.
+    Returns None if nothing works.
+    """
+    methods = candidates or list(_PROBE_ORDER)
+    for name in methods:
+        method = getattr(agent_obj, name, None)
+        if callable(method):
+            return name
+    return None
 
 
 def build_schema(
