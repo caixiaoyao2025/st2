@@ -199,10 +199,24 @@ class $adapter_class:
         return self.agent
 
     def register_tools(self, agent, tools):
-        """Inject a list of tool wrappers into the agent."""
-        reg_fn = getattr(agent, self._reg_method)
-        for tool in tools:
-            reg_fn(tool)
+        """Inject tools: try agent's native method, fallback to direct append."""
+        target = agent or self.agent
+        # Try agent's native registration method
+        reg_fn = getattr(target, self._reg_method, None)
+        if reg_fn:
+            for t in tools:
+                try:
+                    reg_fn(t)
+                except Exception:
+                    # Fallback: direct append to tools list
+                    if not hasattr(target, 'tools') or target.tools is None:
+                        target.tools = []
+                    target.tools.append(t)
+        else:
+            if not hasattr(target, 'tools') or target.tools is None:
+                target.tools = []
+            for t in tools:
+                target.tools.append(t)
         return len(tools)
 
     def install_tools(self, tools):

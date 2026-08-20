@@ -487,14 +487,17 @@ def build_schema(
     # Fallback: derive module_path from agent class file location
     def _file_to_module(filepath: str) -> str | None:
         """Convert e.g. /repo/biomni/agent/react.py -> biomni.agent.react"""
+        # Find the real package root: walk up until we find a dir without __init__.py
+        base = Path(model.repo_path).resolve()
+        while (base / "__init__.py").exists() and base.parent != base:
+            base = base.parent
         try:
-            rel = os.path.relpath(filepath, model.repo_path)
+            rel = os.path.relpath(filepath, str(base))
         except ValueError:
             return None
         parts = Path(rel).with_suffix("").parts
         if len(parts) < 2:
             return None
-        # skip __init__ parts
         parts = [p for p in parts if p != "__init__"]
         return ".".join(parts) if parts else None
 
