@@ -16,6 +16,7 @@ def _tool_dicts_to_mcp(tools: list[dict]) -> list[dict]:
     for t in tools:
         if not isinstance(t, dict) or not t.get("name"):
             continue
+        tool_id = t["name"]
         params_schema = t.get("params_schema") or []
         properties = {}
         required = []
@@ -70,6 +71,7 @@ def _tool_dicts_to_mcp(tools: list[dict]) -> list[dict]:
                     if p.get("required") is True:
                         sub_required.append(pname)
                 mcp_tools.append({
+                    "id": fname,
                     "name": fname,
                     "description": sub_desc,
                     "inputSchema": {
@@ -80,6 +82,7 @@ def _tool_dicts_to_mcp(tools: list[dict]) -> list[dict]:
                 })
         else:
             mcp_tools.append({
+                "id": t["name"],
                 "name": t["name"],
                 "description": t.get("description") or t["name"],
                 "inputSchema": {
