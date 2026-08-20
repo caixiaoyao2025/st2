@@ -429,7 +429,7 @@ def preflight(
 
     if install_missing and missing_pip:
         pkg_names = [d.pip_name for d in missing_pip]
-        display(f"  Installing {len(pkg_names)} packages ...")
+        print(f"  Installing {len(pkg_names)} packages ...")
         try:
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-q"] + pkg_names,
@@ -462,7 +462,7 @@ def preflight(
     return result
 
 
-def display(result: PreflightResult) -> str:
+def preflight_report(result: PreflightResult) -> str:
     """Format preflight result as readable text."""
     lines = [f"Agent Preflight: {result.status}", f"  Python {result.python_version} ({'OK' if result.python_ok else 'TOO OLD'})"]
 
