@@ -171,19 +171,21 @@ class {adapter_class}:
         mod = _importlib.import_module(self._agent_class_path)
         cls = getattr(mod, self._agent_class_name)
         kwargs = dict(self._init_defaults)
-        # Auto-create LLM client from env vars if param exists but is None
+        # Auto-fill LLM-related params from env vars
         import os
-        llm_params = [k for k in kwargs if k.lower() in ("llm", "client", "model", "llm_client")]
-        for lp in llm_params:
-            if kwargs.get(lp) is None:
-                try:
-                    from openai import OpenAI
-                    kwargs[lp] = OpenAI(
-                        api_key=os.environ.get("OPENAI_API_KEY"),
-                        base_url=os.environ.get("OPENAI_BASE_URL"),
-                    )
-                except Exception:
-                    pass
+        _model = os.environ.get("OPENAI_MODEL", "")
+        _api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("WESTLAKE_API_KEY")
+        _base_url = os.environ.get("OPENAI_BASE_URL", "")
+        for k in list(kwargs):
+            kl = k.lower()
+            if kl in ("llm", "model") and not kwargs[k]:
+                kwargs[k] = _model or "gpt-4o"
+            elif kl == "api_key" and not kwargs[k]:
+                kwargs[k] = _api_key
+            elif kl == "base_url" and not kwargs[k]:
+                kwargs[k] = _base_url
+            elif kl == "source" and not kwargs[k]:
+                kwargs[k] = "Custom"
         kwargs.update(overrides)
         self.agent = cls(**kwargs) if kwargs else cls()
         return self.agent
