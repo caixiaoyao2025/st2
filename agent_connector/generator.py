@@ -146,18 +146,47 @@ def _safe_identifier(name: str) -> str:
 
 
 ADAPTER_TEMPLATE = '''"""Auto-generated adapter for agent class: {agent_class}"""
+import importlib as _importlib
 
 
 class {adapter_class}:
-    """Binds a list of tool wrappers into a {agent_class} agent."""
+    """Unified adapter: create_agent / register_tools / run.
 
-    def __init__(self, agent):
+    Auto-generated from the agent's source code.  The execution entrypoint
+    ({execution_method}) was detected by scanner.py.
+    """
+
+    def __init__(self, agent=None, agent_class_path="{module_path}", agent_class_name="{agent_class}"):
+        self._agent_class_path = agent_class_path
+        self._agent_class_name = agent_class_name
+        self._reg_method = "{registration_method}"
+        self._exec_method = "{execution_method}"
         self.agent = agent
 
-    def install_tools(self, tools):
+    # -- lifecycle -----------------------------------------------------------
+
+    def create_agent(self, **kwargs):
+        """Import the agent class and instantiate it."""
+        mod = _importlib.import_module(self._agent_class_path)
+        cls = getattr(mod, self._agent_class_name)
+        self.agent = cls(**kwargs) if kwargs else cls()
+        return self.agent
+
+    def register_tools(self, agent, tools):
+        """Inject a list of tool wrappers into the agent."""
+        reg_fn = getattr(agent, self._reg_method)
         for tool in tools:
-            self.agent.{registration_method}(tool)
+            reg_fn(tool)
         return len(tools)
+
+    def install_tools(self, tools):
+        """Legacy: inject tools into self.agent (backward compat)."""
+        return self.register_tools(self.agent, tools)
+
+    def run(self, agent=None, prompt=""):
+        """Execute the agent with a prompt via its detected entrypoint."""
+        target = agent or self.agent
+        return getattr(target, self._exec_method)(prompt)
 '''
 
 
@@ -168,6 +197,8 @@ def make_adapter_class_name(agent_class: str) -> str:
 def generate_adapter(
     agent_class: str,
     registration_method: str,
+    execution_method: str = "run",
+    module_path: str = "",
     out_path: str = "adapter.py",
 ) -> str:
     """Write the adapter module and return its path."""
@@ -175,6 +206,8 @@ def generate_adapter(
         agent_class=agent_class,
         adapter_class=make_adapter_class_name(agent_class),
         registration_method=_safe_identifier(registration_method),
+        execution_method=_safe_identifier(execution_method),
+        module_path=module_path or "",
     )
     Path(out_path).write_text(code, encoding="utf-8")
     return out_path
@@ -396,13 +429,16 @@ def generate_wiring(
         adapter_path = generate_adapter(
             schema.get("agent_class") or "Agent",
             schema["registration_method"],
+            execution_method=schema.get("execution_method") or DEFAULT_EXECUTION_METHOD,
+            module_path=schema.get("module") or "",
             out_path=os.path.join(out_dir, "adapter.py"),
         )
         artifacts["adapter"] = adapter_path
         instructions = (
-            "Inject with: "
             f"Adapter = load_adapter('{schema.get('agent_class') or 'Agent'}', adapter_path=...); "
-            "Adapter(agent).install_tools(load_wrappers('generated_tools', registration_style=...))"
+            f"agent = adapter.create_agent(); "
+            f"adapter.register_tools(agent, wrappers); "
+            f"result = adapter.run(agent, prompt)"
         )
     else:
         Path(out_dir).mkdir(parents=True, exist_ok=True)

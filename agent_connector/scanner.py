@@ -20,7 +20,7 @@ logger = logging.getLogger("agent-connector.scanner")
 # --- keyword heuristics -------------------------------------------------
 REGISTRATION_HINTS = ("register", "add_tool", "add_mcp", "install", "attach", "append")
 TOOL_NAME_HINTS = ("tool", "function", "action", "skill", "api", "mcp", "plugin")
-EXECUTION_METHOD_HINTS = ("run", "execute", "call", "invoke", "use", "apply", "__call__")
+EXECUTION_METHOD_HINTS = ("run", "execute", "call", "invoke", "use", "apply", "go", "__call__")
 TOOL_SCHEMA_FIELDS = ("name", "description", "command", "parameters", "input_schema", "schema")
 SKIP_DIR_PARTS = {
     ".git",
@@ -283,7 +283,7 @@ def find_tool_class_candidates(model: RepoModel) -> list[dict[str, Any]]:
     return candidates
 
 
-_INVOCATION_RE = re.compile(r"\.(invoke|run|execute|__call__|call)\s*\(")
+_INVOCATION_RE = re.compile(r"\.(invoke|run|execute|go|__call__|call)\s*\(")
 
 
 def detect_execution_method(files: list[str]) -> tuple[str | None, int, str | None]:
@@ -374,6 +374,7 @@ def build_schema(
         "registration_via_decorator": bool(best_reg and best_reg.get("decorator")),
         "execution_method": best_exec["name"] if best_exec else None,
         "execution_class": best_exec.get("class_name") if best_exec else None,
+        "execution_candidates": [e["name"] for e in executions] if executions else [],
         "tool_class": tool_classes[0]["name"] if tool_classes else None,
         "tool_class_fields": tool_classes[0]["attributes"] if tool_classes else [],
         "confidence": 0.7 if (best_reg and best_exec) else 0.3,

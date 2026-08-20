@@ -10,11 +10,8 @@ import yaml
 from graph_tool_call import ToolGraph
 
 
-def build_graph_from_registry(registry_path: str) -> ToolGraph:
-    """Load MCP registry YAML and build a ToolGraph for retrieval."""
-    with open(registry_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    tools = data.get("tools", [])
+def _tool_dicts_to_mcp(tools: list[dict]) -> list[dict]:
+    """Convert agent-connector tool dicts to MCP tool format for ToolGraph."""
     mcp_tools = []
     for t in tools:
         if not isinstance(t, dict) or not t.get("name"):
@@ -91,9 +88,21 @@ def build_graph_from_registry(registry_path: str) -> ToolGraph:
                     "required": required,
                 },
             })
+    return mcp_tools
+
+def build_graph_from_tools(tools: list[dict]) -> ToolGraph:
+    """Build a ToolGraph from agent-connector tool dicts (in-memory)."""
+    mcp_tools = _tool_dicts_to_mcp(tools)
     graph = ToolGraph()
     graph.ingest_mcp_tools(mcp_tools, detect_dependencies=True)
     return graph
+
+
+def build_graph_from_registry(registry_path: str) -> ToolGraph:
+    """Load MCP registry YAML and build a ToolGraph for retrieval."""
+    with open(registry_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    return build_graph_from_tools(data.get("tools", []))
 
 
 # -- Abstention thresholds --------------------------------------------------
