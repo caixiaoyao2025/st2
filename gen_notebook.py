@@ -78,7 +78,7 @@ code([
     "    value='deepseek-v4-flash',\n",
     "    description='Model:', layout=widgets.Layout(width='70%'))\n",
     "base_input = widgets.Text(\n",
-    "    value='https://ark.cn-beijing.volces.com/api/v3',\n",
+    "    value='https://tokenhub.tencentmaas.com/v1',\n",
     "    description='Base URL:', layout=widgets.Layout(width='90%'))\n",
     "btn = widgets.Button(description='Connect agent', button_style='primary')\n",
     "out = widgets.Output()\n",

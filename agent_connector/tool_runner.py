@@ -151,8 +151,11 @@ def validate_arguments(spec: dict[str, Any], arguments: dict[str, Any]) -> tuple
     # _active_subcommand), it is NOT a user-supplied input.
     import re as _re
     cmd = spec.get("command") or ""
-    if spec.get("_active_subcommand") and ("{subcommand}" in cmd or "{{subcommand}}" in cmd):
-        return "leaf command still contains subcommand placeholder"
+    # NOTE: a leaf command MAY still carry the `{subcommand}` placeholder here.
+    # The subcommand runner (_render_subcommand in argv_renderer.py) resolves it
+    # at execution time via `_active_subcommand`, so we must NOT reject it. Only
+    # a raw BASE spec (no `_active_subcommand`) is rejected, and that happens
+    # earlier in this function.
     used = _re.findall(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}", cmd)
     if spec.get("arg_style") == "subcommand":
         used = [v for v in used if v != "subcommand"]

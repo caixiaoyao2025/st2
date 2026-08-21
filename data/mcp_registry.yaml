@@ -619,14 +619,15 @@ tools:
       - name: input
         type: path
         description: Positional argument INPUT
-        required: false
+        required: true
         positional: true
         position: 0
-        artifact_type: binseq
-        extensions: &id002
-        - .vbq
-        - .cbq
-        - .bq
+        artifact_type: fasta
+        extensions:
+        - .fa
+        - .fasta
+        - .fq
+        - .fastq
       usage: bqtools encode [OPTIONS] [INPUT]...
       outputs:
         output:
@@ -693,7 +694,10 @@ tools:
         positional: true
         position: 0
         artifact_type: binseq
-        extensions: *id002
+        extensions: &id002
+        - .vbq
+        - .cbq
+        - .bq
       usage: bqtools decode [OPTIONS] <INPUT>
       outputs:
         output:

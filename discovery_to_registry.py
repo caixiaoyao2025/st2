@@ -310,26 +310,38 @@ _PARAM_ARTIFACTS: dict[str, dict] = {
 }
 
 # Tool-name -> param-name -> artifact contract (overrides param-name rules)
-_TOOL_PARAM_ARTIFACTS: dict[tuple[str, str], dict] = {
+_TOOL_PARAM_ARTIFACTS: dict[tuple, dict] = {
+    # bqtools: DEFAULT input is BINSEQ (most subcommands CONSUME BINSEQ).
+    # This base rule applies to every subcommand that does not override it.
     ("bqtools", "input"): {"artifact_type": "binseq", "extensions": [".vbq", ".cbq", ".bq"]},
+    # encode is the EXCEPTION: FASTA/FASTQ -> BINSEQ. Subcommand-specific
+    # 3-tuple keys WIN over the base (tool, param) rule (see infer_artifact_contract).
+    ("bqtools", "encode", "input"): {"artifact_type": "fasta", "extensions": [".fa", ".fasta", ".fq", ".fastq"]},
     ("bioemu", "sequence"): {"artifact_type": "fasta", "extensions": [".fasta", ".fa"]},
 }
 
 
 def infer_artifact_contract(tool_name: str, param_name: str,
                             description: str = "",
-                            command: str = "") -> dict:
+                            command: str = "",
+                            sub_name: str = "") -> dict:
     """Infer the artifact contract for a ToolSpec input parameter.
 
     Returns a dict with keys like artifact_type, extensions, semantic_type.
     Empty dict means no artifact contract could be inferred.
 
     Priority:
-      1. Tool+param specific rules (highest confidence)
-      2. Param-name rules (e.g. cool_path -> cool_matrix)
-      3. Description-based regex (fallback, lower confidence)
+      1. Tool+subcommand+param specific rules (highest confidence)
+      2. Tool+param specific rules (e.g. base bqtools input -> binseq)
+      3. Param-name rules (e.g. cool_path -> cool_matrix)
+      4. Description-based regex (fallback, lower confidence)
     """
-    # Layer 1: tool+param specific
+    # Layer 1: tool+subcommand+param specific (wins over base for encode etc.)
+    if sub_name:
+        key3 = (tool_name, sub_name, param_name)
+        if key3 in _TOOL_PARAM_ARTIFACTS:
+            return dict(_TOOL_PARAM_ARTIFACTS[key3])
+    # Layer 2: tool+param specific
     key = (tool_name, param_name)
     if key in _TOOL_PARAM_ARTIFACTS:
         return dict(_TOOL_PARAM_ARTIFACTS[key])
@@ -370,7 +382,7 @@ def _annotate_artifacts(subs: dict, tool_name: str) -> None:
             ck = pname.lstrip("-").lower().replace("-", "_")
             desc = p.get("description") or ""
             cmd = ""  # command not available at param level
-            contract = infer_artifact_contract(tool_name, ck, desc, cmd)
+            contract = infer_artifact_contract(tool_name, ck, desc, cmd, sub_name=sub)
             if contract:
                 p.update(contract)
 
