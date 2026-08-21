@@ -42,7 +42,12 @@ def _tool_dicts_to_mcp(tools: list[dict]) -> list[dict]:
             if p.get("required") is True:
                 required.append(pname)
         arg_style = t.get("arg_style") or "cli"
-        if arg_style == "subcommand" and t.get("subcommand_details"):
+        # Only expand subcommand_details into per-subcommand nodes when this is a
+        # BASE tool whose command still holds the `{subcommand}` placeholder. Leaf
+        # wrappers (e.g. bqtools_encode) keep the base subcommand_details but have a
+        # concrete command, so re-expanding them would spawn garbage nodes like
+        # `bqtools_encode_revcomp` and drown out other tools in retrieval.
+        if arg_style == "subcommand" and t.get("subcommand_details") and "{subcommand}" in (t.get("command") or ""):
             for sub, detail in t["subcommand_details"].items():
                 fname = f"{t['name']}_{sub.replace('-', '_')}"
                 sub_desc = detail.get("description") or f"{t['name']} {sub}"
