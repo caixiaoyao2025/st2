@@ -109,22 +109,47 @@ def generate_wrappers(
     return written
 
 
+def _function_signature(tool: dict) -> tuple[str, str]:
+    """Build (python_signature, kwargs_dict_literal) for a function wrapper.
+
+    Real parameter names are emitted from ToolSpec.inputs so that agents which
+    synthesize a schema from the wrapper SOURCE (e.g. Biomni's A1.add_tool ->
+    function_to_api_schema) see concrete variables and produce a parseable
+    schema. The ToolSpec remains the single source of truth at runtime: the
+    signature is only a hint for schema generation, and run_tool_spec still
+    coerces every value itself.
+    """
+    inputs = tool.get("inputs") or {}
+    params: list[str] = []
+    assigns: list[str] = []
+    for raw, meta in inputs.items():
+        if raw in ("subcommand",):
+            continue
+        pid = _safe_identifier(raw)
+        if (meta or {}).get("required"):
+            params.append(f"{pid}: str")
+        else:
+            params.append(f"{pid}: str = None")
+        assigns.append(f"{repr(raw)}: {pid}")
+    sig = ", ".join(params) if params else ""
+    kd = "{" + ", ".join(assigns) + "}" if assigns else "{}"
+    return sig, kd
+
+
 def _emit_wrapper(tool: dict, registration_style: str, execution_method: str) -> str:
     class_name = make_class_name(tool["name"])
     if registration_style == "function":
-        # The wrapper's Python signature is a CONVENIENCE, never a schema: the
-        # canonical type/required semantics live in the ToolSpec (json_schema_
-        # type / is_required) and in run_tool_spec's _coerce_arguments. A typed
-        # `def tool(input: str, threads: str = None)` would re-declare types
-        # (1 vs "1") as a THIRD schema source, so every function wrapper is
-        # `def tool(**kwargs)` and the ToolSpec stays the only type definition.
+        # Real parameter names (from ToolSpec.inputs) so A1's function_to_api_schema
+        # can synthesize a parseable schema; the ToolSpec stays the single source
+        # of truth at runtime (run_tool_spec coerces values itself).
+        sig, kd = _function_signature(tool)
         return FUNCTION_WRAPPER_TEMPLATE.format(
             name=tool["name"],
             func_name=_safe_identifier(tool["name"]),
-            signature="**kwargs",
+            signature=sig,
             desc=tool.get("description", ""),
             spec_repr=repr(tool),
-            kwargs_dict="dict(kwargs)",
+            kwargs_dict=kd,
         )
     return WRAPPER_TEMPLATE.format(
         class_name=class_name,
