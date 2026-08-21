@@ -1772,7 +1772,11 @@ tools:
   - backtrans-align
   subcommand_details:
     convert:
-      description: Convert between sequence formats (FASTA/FASTQ/CLU/PHYLIP/NEXUS/EMBL...).
+      description: 'Reverse complement a FASTA file: produce the reverse complement
+        of each sequence and write it to the output file. Also converts between sequence
+        formats (FASTA/FASTQ/CLU/PHYLIP/NEXUS/EMBL). This is the pure-Python, pip-installable
+        way to reverse complement sequences - no Rust/cargo toolchain required (unlike
+        bqtools revcomp).'
       params:
       - name: source_file
         type: path
@@ -1807,6 +1811,12 @@ tools:
         - rna
         - rna-ambiguous
         - protein
+      - name: --reverse-complement
+        type: boolean
+        description: Reverse complement the sequences (writes the reverse complement
+          of each input sequence)
+        required: false
+        takes_value: false
       outputs:
         dest_file:
           type: file
@@ -1814,10 +1824,9 @@ tools:
           input: dest_file
           source: help_parsed
     info:
-      description: >-
-        Summarize one or more sequence files - report the number of sequences,
-        the total length (total number of bases), and per-sequence statistics.
-        Use this to count sequences and compute the total length of a FASTA file.
+      description: Summarize one or more sequence files - report the number of sequences,
+        the total length (total number of bases), and per-sequence statistics. Use
+        this to count sequences and compute the total length of a FASTA file.
       params:
       - name: sequence_files
         type: path
