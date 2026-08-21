@@ -118,20 +118,27 @@ def _function_signature(tool: dict) -> tuple[str, str]:
     schema. The ToolSpec remains the single source of truth at runtime: the
     signature is only a hint for schema generation, and run_tool_spec still
     coerces every value itself.
+
+    Required parameters (no default) MUST precede optional ones, or Python
+    raises SyntaxError ("parameter without a default follows parameter with a
+    default") -- required params are kept default-less so A1's schema generator
+    lists them under required_parameters.
     """
     inputs = tool.get("inputs") or {}
-    params: list[str] = []
+    required: list[str] = []
+    optional: list[str] = []
     assigns: list[str] = []
     for raw, meta in inputs.items():
         if raw in ("subcommand",):
             continue
         pid = _safe_identifier(raw)
         if (meta or {}).get("required"):
-            params.append(f"{pid}: str")
+            required.append(f"{pid}: str")
         else:
-            params.append(f"{pid}: str = None")
+            optional.append(f"{pid}: str = None")
         assigns.append(f"{repr(raw)}: {pid}")
-    sig = ", ".join(params) if params else ""
+    parts = required + optional
+    sig = ", ".join(parts) if parts else ""
     kd = "{" + ", ".join(assigns) + "}" if assigns else "{}"
     return sig, kd
 
