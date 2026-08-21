@@ -199,8 +199,23 @@ def _resolve_resource_path(spec: dict[str, Any], rkey: str,
     return None
 
 
+# Cross-call record of executables that failed to launch (e.g. `command not
+# found`). Once marked, every tool whose command starts with that executable is
+# skipped immediately (no subprocess, no retry) and the caller is told the
+# executable is unavailable -- so the LLM stops hammering the same missing tool
+# and its siblings (e.g. seqmagick_info / seqmagick_convert both -> `seqmagick`).
+_UNAVAILABLE_EXECUTABLES: set[str] = set()
+
+
+def _executable_of(spec: dict[str, Any]) -> str:
+    """First token of the tool's concrete command -- the executable name."""
+    cmd = (spec.get("execution") or {}).get("command") or spec.get("command") or ""
+    cmd = cmd.replace("{subcommand}", "").replace("{{subcommand}}", "").strip()
+    return cmd.split()[0] if cmd.split() else ""
+
+
 def _run_cli(command: str, arguments: dict[str, Any], timeout: int = 600,
-             env: dict | None = None) -> dict[str, Any]:
+              env: dict | None = None) -> dict[str, Any]:
     argv = _render_command(command, arguments)
     try:
         completed = subprocess.run(
@@ -588,6 +603,23 @@ def run_tool_spec(spec: dict[str, Any], arguments: dict[str, Any],
     else:
         env_run = None
 
+    # Cross-call unavailable propagation: if this tool's executable already
+    # failed to launch in a prior call, skip the subprocess entirely and tell
+    # the caller it is unavailable (so the LLM stops retrying it / its siblings).
+    if exec_type == "cli":
+        _exe = _executable_of(spec)
+        if _exe and _exe in _UNAVAILABLE_EXECUTABLES:
+            return {
+                "status": "command_error", "return_code": 127,
+                "stdout": "",
+                "stderr": f"executable '{_exe}' is unavailable "
+                          f"(marked from a prior failed run)",
+                "argv": [_exe],
+                "error_type": "tool_not_installed",
+                "unavailable_executable": _exe,
+                "install": spec.get("install"),
+            }
+
     if exec_type == "python":
         ep = execution.get("entry_point")
         if ep:
@@ -628,6 +660,22 @@ def run_tool_spec(spec: dict[str, Any], arguments: dict[str, Any],
     else:
         result = _run_cli(execution.get("command", ""), arguments, timeout=timeout,
                           env=env_run)
+    # Mark the executable unavailable when the run failed because the binary
+    # itself could not be launched (command not found / exit 127). This
+    # propagates to every sibling tool sharing the same executable (e.g.
+    # seqmagick_info and seqmagick_convert both depend on `seqmagick`), so
+    # subsequent retries are skipped instead of re-hammering a missing tool.
+    if exec_type == "cli":
+        _exe = _executable_of(spec)
+        if (_exe and result.get("status") == "command_error"
+                and (result.get("return_code") == 127
+                     or "command not found" in (result.get("stderr") or "").lower())):
+            _UNAVAILABLE_EXECUTABLES.add(_exe)
+            result["error_type"] = "tool_not_installed"
+            result["unavailable_executable"] = _exe
+            if "install" not in result:
+                result["install"] = spec.get("install")
+
     # if the command still can't be found after auto-install, tell the caller
     if result.get("return_code") == 127 and install_errors:
         result["stderr"] = (result.get("stderr", "") +
@@ -692,9 +740,21 @@ def format_result(result: dict[str, Any]) -> str:
         msg += "\n[error_type: invalid_arguments] Fix the argument names/values " \
                "per the tool's schema (required/type), then retry THIS tool."
     elif status == "command_error" and result.get("return_code") == 127:
-        msg += ("\n[error_type: tool_not_installed] The tool executable is missing "
-                "and could not be auto-installed. Do NOT retry this tool; choose "
-                "another tool or report it as unavailable.")
+        exe = result.get("unavailable_executable")
+        msg += "\n[error_type: tool_not_installed] "
+        if exe:
+            msg += (f"The executable `{exe}` is missing/unavailable and has been "
+                    f"marked unavailable, so every tool that depends on it "
+                    f"(`{exe}_*`) is skipped. Do NOT retry these tools. ")
+        else:
+            msg += ("The tool executable is missing and could not be auto-installed. "
+                    "Do NOT retry this tool. ")
+        install = result.get("install") or {}
+        if install.get("command"):
+            msg += (f"Install contract (from registry -- cite this, do not guess a "
+                    f"command): method={install.get('method')}, "
+                    f"command=`{install.get('command')}`. ")
+        msg += "Report the install command to the user or choose another tool."
     elif status == "command_error" and result.get("return_code") is None:
         msg += "\n[error_type: timeout] The tool timed out. Do NOT retry with the " \
                "same arguments."
