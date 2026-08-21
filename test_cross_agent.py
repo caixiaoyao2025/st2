@@ -569,7 +569,7 @@ def test_biomni_inject():
     try:
         agent2 = A1(
             path="/tmp/_biomni_data2",
-            llm=os.environ.get("WESTLAKE_MODEL", "doubao-seed-evolving"),
+            llm=os.environ.get("WESTLAKE_MODEL", "deepseek-v4-flash"),
             source="Custom",
             base_url=os.environ.get("WESTLAKE_BASE_URL"),
             api_key=api_key,

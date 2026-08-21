@@ -36,7 +36,7 @@ API_KEY = (
     or os.environ.get("DEEPSEEK_API_KEY")
     or ""
 )
-MODEL = os.environ.get("WESTLAKE_MODEL") or os.environ.get("OPENAI_MODEL") or os.environ.get("DEEPSEEK_MODEL") or "doubao-seed-evolving"
+MODEL = os.environ.get("WESTLAKE_MODEL") or os.environ.get("OPENAI_MODEL") or os.environ.get("DEEPSEEK_MODEL") or "deepseek-v4-flash"
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 
