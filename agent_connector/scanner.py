@@ -426,6 +426,92 @@ def find_init_signatures(model: RepoModel) -> dict[str, dict[str, Any]]:
     return result
 
 
+MCP_STRONG_EVIDENCE = (
+    "langchain_mcp_adapters",
+    "MultiServerMCPClient",
+    "FastMCP",
+    "from mcp import ClientSession",
+    "from mcp import StdioServerParameters",
+    "mcp.server",
+    "mcp.client",
+    "add_mcp",
+)
+MCP_CONFIG_NAMES = (".mcp.json", "mcp.json", "mcp_config.yaml",
+                    "mcp_config.yml", "mcp_config.json")
+NATIVE_REG_METHODS = ("add_tool", "register_tool", "register", "add_mcp",
+                      "with_tools", "bind_tools")
+CODE_EXEC_HINT_RE = re.compile(
+    r"(<execute>|exec\(|__import__|code_execution|repl|ipython|run_code|execute_code|jupyter)",
+    re.I,
+)
+
+
+def detect_capabilities(repo_path: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Classify the agent by *how* it can accept tools, with MCP as the
+    highest-priority, most standard capability.
+
+    Returns a structured ``capabilities`` dict that ``generate_wiring`` uses to
+    pick an integration mode by the priority:
+
+        mcp  >  native_tool_calling  >  code_execution  >  config_wiring  >  prompt_wiring
+
+    ``mcp`` carries an ``evidence`` list so the caller knows *why* MCP was
+    detected (avoids false positives from a bare "mcp" substring).
+    """
+    root = Path(repo_path).resolve()
+    mcp_evidence: list[str] = []
+
+    for file in scan_python_files(repo_path):
+        try:
+            text = Path(file).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for token in MCP_STRONG_EVIDENCE:
+            if token in text and token not in mcp_evidence:
+                mcp_evidence.append(token)
+
+    for current_root, dirs, filenames in os.walk(root):
+        dirs[:] = [d for d in dirs if not _skip_dir((Path(current_root).name, d))]
+        for filename in filenames:
+            low = filename.lower()
+            if low in MCP_CONFIG_NAMES or (
+                low.startswith("mcp_config") and low.endswith((".yaml", ".yml", ".json"))
+            ):
+                if "config:" + filename not in mcp_evidence:
+                    mcp_evidence.append("config:" + filename)
+
+    reg_method = schema.get("registration_method")
+    if reg_method == "add_mcp" and "registration_method=add_mcp" not in mcp_evidence:
+        mcp_evidence.append("registration_method=add_mcp")
+
+    mcp_supported = bool(mcp_evidence)
+
+    native_tool_calling = bool(reg_method in NATIVE_REG_METHODS) if reg_method else False
+
+    code_execution = False
+    for file in scan_python_files(repo_path):
+        try:
+            text = Path(file).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if CODE_EXEC_HINT_RE.search(text):
+            code_execution = True
+            break
+
+    wiring = detect_wiring_style(repo_path, reg_method)
+    config_wiring = wiring == "config"
+    prompt_wiring = wiring == "prompt"
+
+    return {
+        "mcp": {"supported": mcp_supported, "evidence": sorted(set(mcp_evidence))},
+        "native_tool_calling": bool(native_tool_calling),
+        "code_execution": bool(code_execution),
+        "config_wiring": bool(config_wiring),
+        "prompt_wiring": bool(prompt_wiring),
+        "wiring_style": wiring,
+    }
+
+
 def build_schema(
     repo_path: str,
     *,
@@ -535,6 +621,9 @@ def build_schema(
         "executions": executions[:10] if include_evidence else None,
         "tool_classes": tool_classes[:10] if include_evidence else None,
     }
+    # First-class capability classification (MCP is the highest-priority,
+    # most standard integration path and is checked before wiring_style).
+    schema["capabilities"] = detect_capabilities(repo_path, schema)
     return schema
 
 

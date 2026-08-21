@@ -320,7 +320,13 @@ def load_wrappers(package_name: str = "generated_tools", registration_style: str
     instantiated.
     """
     instances: list[Any] = []
-    package = importlib.import_module(package_name)
+    try:
+        package = importlib.import_module(package_name)
+    except (ImportError, ModuleNotFoundError):
+        # No wrappers were generated (e.g. MCP mode serves tools via server.py),
+        # or the package path isn't importable yet. Return empty so callers that
+        # guard on the result keep working.
+        return instances
     package_path = Path(package.__file__).parent
     for filename in sorted(os.listdir(package_path)):
         if not filename.endswith("_wrapper.py"):
@@ -501,21 +507,93 @@ WIRING_INSTRUCTIONS = {
 }
 
 
+def _is_mcp_supported(schema: dict[str, Any], caps: dict[str, Any] | None) -> bool:
+    """MCP is the highest-priority capability.
+
+    Honours the structured ``capabilities`` block first, then falls back to a
+    token heuristic for callers that haven't populated capabilities yet.
+    """
+    if caps and isinstance(caps.get("mcp"), dict):
+        if caps["mcp"].get("supported"):
+            return True
+    if caps and caps.get("mcp") is True:
+        return True
+    hay = " ".join(str(x or "") for x in (
+        schema.get("module_path"), schema.get("agent_class"),
+        schema.get("registration_method"),
+    )).lower()
+    return any(t in hay for t in ("biochatter", "biomni", "langchain", "mcp"))
+
+
+def generate_mcp_config(
+    tools: list[dict[str, Any]],
+    out_dir: str = "wiring",
+    registry_path: str | None = None,
+) -> str:
+    """MCP mode artifact: how to launch the repo's FastMCP server (server.py).
+
+    No per-agent wrapper/prompt generation is produced -- the registry tools are
+    served over MCP, so the agent only needs an MCP client pointing here.
+    """
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    cfg = {
+        "transport": "stdio",
+        "command": ["python", "server.py"],
+        "registry": registry_path or "data/mcp_registry.yaml",
+        "tools_served": [t.get("name") for t in tools],
+        "note": (
+            "Tools are served by the repo's FastMCP server (server.py) from the "
+            "registry. Point the agent's MCP client at this server -- no per-agent "
+            "wrapper/prompt generation is required."
+        ),
+    }
+    path = Path(out_dir) / "mcp_server_config.json"
+    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path)
+
+
 def generate_wiring(
     tools: list[dict[str, Any]],
     schema: dict[str, Any],
     out_dir: str = "wiring",
     registration_style: str | None = None,
 ) -> dict[str, Any]:
-    """Top-level wiring dispatch based on the agent_schema.
+    """Top-level wiring dispatch based on the agent_schema capabilities.
 
-    - registration_method present      -> wrappers + adapter (inject path)
-    - wiring_style 'manifest'/'config'/'prompt' -> emit the corresponding artifact
-    Returns {'mode': ..., 'artifacts': {name: path|text}, 'instructions': ...}.
+    Priority (the architecture-adapter decision):
+
+        1. mcp                  -> MCP server config only (tools served by server.py)
+        2. native_tool_calling  -> wrappers + adapter (inject path)
+        3. code_execution       -> prompt block (agent executes described tools)
+        4. config_wiring        -> tool-catalog config fragment
+        5. prompt_wiring        -> system-prompt tool block
+
+    MCP is checked first because it is a cross-framework standard interface: when
+    the agent supports MCP we never regenerate per-agent wrappers/prompts.
     """
     artifacts: dict[str, Any] = {}
+    caps = schema.get("capabilities")
     mode: str
 
+    # ---- 1) MCP (first-class, highest priority) -----------------------------
+    if _is_mcp_supported(schema, caps):
+        mode = "mcp"
+        artifacts["mcp"] = generate_mcp_config(tools, out_dir=out_dir)
+        instructions = (
+            "MCP mode: tools are served by the repo's FastMCP server (server.py) from "
+            "the registry. Point the agent's MCP client at the generated config -- no "
+            "per-agent wrapper/prompt generation is needed. The runtime drives the "
+            "tools over MCP (mcp-native when the agent is itself an MCP client, otherwise "
+            "via our MCP tool-calling loop)."
+        )
+        return {
+            "mode": mode,
+            "artifacts": artifacts,
+            "instructions": instructions,
+            "capabilities": caps,
+        }
+
+    # ---- 2) native tool calling (adapter / inject path) ---------------------
     if schema.get("registration_method"):
         mode = "adapter"
         generated = generate_wrappers(
@@ -541,15 +619,27 @@ def generate_wiring(
             f"result = adapter.run(agent, prompt)"
         )
     else:
+        # ---- 3/4/5) code_execution / config / prompt -----------------------
         Path(out_dir).mkdir(parents=True, exist_ok=True)
-        style = schema.get("wiring_style") or "prompt"
-        mode = style
-        if style == "manifest":
+        caps_d = caps or {}
+        # Capability priority: code_execution > config_wiring > prompt_wiring >
+        # fall back to the legacy wiring_style heuristic (manifest/config/prompt).
+        if caps_d.get("code_execution"):
+            mode = "code"
+        elif caps_d.get("config_wiring"):
+            mode = "config"
+        elif caps_d.get("prompt_wiring"):
+            mode = "prompt"
+        else:
+            mode = schema.get("wiring_style") or "prompt"
+        if mode == "manifest":
             artifacts["manifest"] = generate_tools_manifest(tools, out_path=os.path.join(out_dir, "tools_manifest.json"))
-        elif style == "config":
+        elif mode == "config":
             artifacts["config"] = generate_config_fragment(tools, out_path=os.path.join(out_dir, "tools_config.yaml"))
+        elif mode == "code":
+            artifacts["prompt_block"] = generate_prompt_block(tools)
         else:
             artifacts["prompt_block"] = generate_prompt_block(tools)
-        instructions = WIRING_INSTRUCTIONS[style].format(**artifacts)
+        instructions = WIRING_INSTRUCTIONS.get(mode, WIRING_INSTRUCTIONS["prompt"]).format(**artifacts)
 
-    return {"mode": mode, "artifacts": artifacts, "instructions": instructions}
+    return {"mode": mode, "artifacts": artifacts, "instructions": instructions, "capabilities": caps}
