@@ -479,7 +479,7 @@ def _ensure_installed(spec: dict[str, Any], exec_type: str = "cli") -> tuple[lis
         except Exception:
             return False
 
-    if method in ("pip_pkg", "pip_url"):
+    if method in ("pip", "pip_pkg", "pip_url"):
         # if the pipeline's execute step already installed this tool into a kept
         # venv, reuse it (skip on-demand install - heavy deps like torch).
         venv_path = (spec.get("install") or {}).get("venv_path", "")

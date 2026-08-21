@@ -1853,7 +1853,7 @@ tools:
           source: inferred
   subcommand_discovery_complete: false
   install:
-    method: pip
+    method: pip_pkg
     command: pip install seqmagick
     system_commands: []
     python_packages:
