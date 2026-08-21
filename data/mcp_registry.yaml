@@ -1424,7 +1424,11 @@ tools:
   install:
     method: cargo
     command: cargo install --git https://github.com/ArcInstitute/bqtools
-    system_commands: []
+    system_commands:
+    - command: cargo
+      kind: system_missing
+      install_hint: 'bqtools is a Rust binary; install the Rust toolchain first: curl
+        --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
     python_packages: []
     declared_packages: []
     missing_deps: []
@@ -1737,3 +1741,123 @@ tools:
   expected_outputs:
   - name: output_html
     render_as: text
+- name: seqmagick
+  type: cli
+  arg_style: subcommand
+  command: seqmagick {subcommand}
+  callable_via: ''
+  readme_examples: []
+  readme_usage: ''
+  description: '[Auto-discovered] Manipulate sequence files (convert formats, summarize,
+    filter, transform) - pure-Python, pip-installable. (python)'
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 50
+  inputs: {}
+  resources: {}
+  outputs:
+    stdout:
+      type: text
+      description: Tool result printed to stdout.
+      source: inferred
+  execution:
+    type: cli
+    command: seqmagick {subcommand}
+  subcommands:
+  - convert
+  - info
+  - mogrify
+  - quality-filter
+  - extract-ids
+  - backtrans-align
+  subcommand_details:
+    convert:
+      description: Convert between sequence formats (FASTA/FASTQ/CLU/PHYLIP/NEXUS/EMBL...).
+      params:
+      - name: source_file
+        type: path
+        description: Input sequence file
+        required: true
+        positional: true
+        position: 0
+      - name: dest_file
+        type: path
+        description: Output file
+        required: true
+        positional: true
+        position: 1
+      - name: --input-format
+        type: string
+        description: 'Input file format (default: determine from extension)'
+        required: false
+        takes_value: true
+      - name: --output-format
+        type: string
+        description: 'Output file format (default: determine from extension)'
+        required: false
+        takes_value: true
+      - name: --alphabet
+        type: string
+        description: Input alphabet
+        required: false
+        takes_value: true
+        choices:
+        - dna
+        - dna-ambiguous
+        - rna
+        - rna-ambiguous
+        - protein
+      outputs:
+        dest_file:
+          type: file
+          description: Converted sequence output file
+          input: dest_file
+          source: help_parsed
+    info:
+      description: Print summary statistics about one or more sequence files.
+      params:
+      - name: sequence_files
+        type: path
+        description: Input sequence file(s)
+        required: true
+        positional: true
+        position: 0
+      - name: --input-format
+        type: string
+        description: Input format. Overrides extension for all input files
+        required: false
+        takes_value: true
+      - name: --out-file
+        type: path
+        description: Output destination. Default STDOUT
+        required: false
+        takes_value: true
+      - name: --format
+        type: string
+        description: Output format (tab/csv/align)
+        required: false
+        takes_value: true
+        choices:
+        - tab
+        - csv
+        - align
+      - name: --threads
+        type: int
+        description: Number of threads (CPUs)
+        required: false
+        takes_value: true
+      outputs:
+        stdout:
+          type: text
+          description: Summary statistics printed to stdout
+          source: inferred
+  subcommand_discovery_complete: false
+  install:
+    method: pip
+    command: pip install seqmagick
+    system_commands: []
+    python_packages:
+    - seqmagick
+    declared_packages: []
+    missing_deps: []
+    venv_path: ''

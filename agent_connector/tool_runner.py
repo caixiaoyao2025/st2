@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from typing import Any
@@ -521,13 +522,19 @@ def _ensure_installed(spec: dict[str, Any], exec_type: str = "cli") -> tuple[lis
                 if rc2 != 0:
                     errors.append(f"installed but 'import {pkg_for_import}' still fails")
     elif method == "cargo" and exe_name and _sh.which(exe_name) is None:
-        url = install.get("command", "")
-        if url:
-            argv = url.replace("cargo install --git", "cargo install --git").split()
-            if _try_install(argv, 1800):
-                actions.append(f"cargo install {url}")
-            else:
-                errors.append(f"cargo install {url} failed")
+        if _sh.which("cargo") is None:
+            errors.append(
+                "cargo/Rust toolchain not found in PATH; cannot build this tool. "
+                "Install Rust first: curl --proto =https --tlsv1.2 -sSf "
+                "https://sh.rustup.rs | sh -s -- -y")
+        else:
+            url = install.get("command", "")
+            if url:
+                argv = shlex.split(url)
+                if _try_install(argv, 1800):
+                    actions.append(f"installed via: {url}")
+                else:
+                    errors.append(f"cargo install failed: {url}")
     elif method == "npm" and exe_name and _sh.which(exe_name) is None:
         pkg = install.get("command", "") or cmd_name
         if _try_install(["npm", "install", "-g", pkg], 1800):
