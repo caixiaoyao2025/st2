@@ -7,8 +7,7 @@ tools?" decision here.
 
 Two execution strategies are available:
 
-* MCP (preferred whenever the agent *supports* MCP and the user picks
-  ``Native tool calling``): tools are served through the repo's own FastMCP
+* MCP (preferred whenever the agent *supports* MCP): tools are served through the repo's own FastMCP
   server (``server.py``) and driven via genuine MCP tool-calling. If the agent
   itself is an MCP client (it exposes ``add_mcp``), we attach it as a client and
   let *it* drive the tools with its own LLM -- the most native integration
@@ -104,8 +103,8 @@ def build_runtime(
         "n_tools": len(tools),
     }
 
-    # ---- MCP-first when the agent supports it and native was requested ----
-    if want_native and supports_mcp:
+    # ---- MCP-first: whenever the agent supports MCP, drive tools over MCP ----
+    if supports_mcp:
         # If the agent is alive and an MCP client, attach it and let it drive.
         if agent is not None and hasattr(agent, "add_mcp"):
             try:
