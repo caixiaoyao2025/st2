@@ -93,7 +93,22 @@ class MCPAdapter(BaseAdapter):
         cfg = _write_mcp_config()
         if not hasattr(agent, "add_mcp"):
             raise RuntimeError("Agent reports MCP support but has no add_mcp().")
-        agent.add_mcp(config_path=cfg)
+        # Tool registration over MCP makes ZERO LLM calls: the MCP server
+        # already exposes our canonical schemas (data/mcp_registry.yaml). Only
+        # the agent's own planner (agent.go) needs the LLM later.
+        errors = []
+        for _call in (lambda: agent.add_mcp(config_path=cfg),
+                      lambda: agent.add_mcp(config=cfg)):
+            try:
+                _call()
+                return
+            except TypeError as exc:
+                errors.append(str(exc))
+                continue
+        raise RuntimeError(
+            "agent.add_mcp(...) accepted none of the expected signatures "
+            f"(config_path=, config=). Errors: {errors}"
+        )
 
 
 class NativeToolAdapter(BaseAdapter):
@@ -175,6 +190,7 @@ class NativeToolAdapter(BaseAdapter):
         try:
             import ast as _ast
             import biomni.agent.a1 as _a1mod
+            import biomni.utils as _utilmod
         except Exception:
             return
         spec_by_name = {}
@@ -184,6 +200,7 @@ class NativeToolAdapter(BaseAdapter):
                 spec_by_name[getattr(w, "__name__", s.get("name"))] = s
                 if s.get("name"):
                     spec_by_name[s["name"]] = s
+        # Capture the ORIGINAL implementation before overriding either binding.
         _orig = _a1mod.function_to_api_schema
 
         def _reliable(function_string, llm):
@@ -215,6 +232,12 @@ class NativeToolAdapter(BaseAdapter):
             return {"name": spec.get("name"), "description": spec.get("description", ""),
                     "required_parameters": req, "optional_parameters": opt}
 
+        # Patch BOTH bindings: a1.py may call `function_to_api_schema(...)` as a
+        # module global (from `from biomni.utils import function_to_api_schema`)
+        # OR `biomni.utils.function_to_api_schema(...)` qualified. Overriding the
+        # module attribute on biomni.utils covers the qualified call path; the
+        # a1 module attribute covers the unqualified one.
+        _utilmod.function_to_api_schema = _reliable
         _a1mod.function_to_api_schema = _reliable
 
 
@@ -262,39 +285,34 @@ class PromptAdapter(BaseAdapter):
 
 
 def resolve_adapter(schema: dict, caps: dict):
-    """Pick the adapter by the agent's INTERFACE CONTRACT, never by framework
-    name. Selection is capability + ``tool_interface.schema_format`` driven.
-
-    Same framework (e.g. "langchain") can map to different adapters depending on
-    its concrete tool schema: StructuredTool vs OpenAI-function vs bind_tools.
-    """
-    ti = (schema or {}).get("tool_interface") or {}
-    fmt = ti.get("schema_format")
-    mcp_ok = bool((caps.get("mcp") or {}).get("supported"))
-    native_ok = bool((caps.get("native_tool_calling") or {}).get("supported"))
-    code_ok = bool((caps.get("code_execution") or {}).get("supported"))
-    config_ok = bool((caps.get("config_wiring") or {}).get("supported"))
-
-    # MCP is the most standard, highest-priority contract.
-    if mcp_ok or fmt == "mcp":
-        return MCPAdapter, "mcp"
-    if native_ok or fmt in ("function", "structured_tool", "langchain_tool", "openai_function"):
-        return NativeToolAdapter, fmt or "native_tool"
-    if code_ok or fmt == "namespace":
-        return CodeExecutionAdapter, "namespace"
-    if config_ok or fmt == "config":
-        return ConfigAdapter, "config"
-    return PromptAdapter, "prompt"
+    """Deprecated: kept for backwards compatibility. Use
+    ``agent_connector.adapter_registry.find_adapter`` which raises on unknown
+    interfaces instead of silently guessing."""
+    from agent_connector.adapter_registry import find_adapter, UnsupportedAgentInterface
+    try:
+        return find_adapter(schema, caps)
+    except UnsupportedAgentInterface:
+        # Older fallback behaviour; new callers should expect the exception.
+        return PromptAdapter, "prompt"
 
 
 def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
                   api_key=None, openai_client=None):
-    """Select the right Adapter from the interface contract, inject tools into
-    the (already instantiated) downstream agent, return (agent, info). The
-    caller then drives it with run_agent. Our system never substitutes its own
-    loop."""
+    """Select the adapter from the curated interface registry, inject tools into
+    the (already instantiated) downstream agent, return (agent, info).
+
+    If the detected agent interface is not in the supported set, ``find_adapter``
+    raises ``UnsupportedAgentInterface`` -- we do NOT guess a schema. The caller
+    then drives the agent with ``run_agent``; our system never substitutes its
+    own planner/tool-loop."""
+    from agent_connector.adapter_registry import find_adapter, UnsupportedAgentInterface
+
     caps = (schema or {}).get("capabilities") or {}
-    adapter_cls, contract = resolve_adapter(schema, caps)
+    try:
+        adapter_cls, contract = find_adapter(schema, caps)
+    except UnsupportedAgentInterface:
+        # Propagate clearly so the notebook / caller sees exactly what to fix.
+        raise
 
     info = {
         "supports_mcp": bool((caps.get("mcp") or {}).get("supported")),

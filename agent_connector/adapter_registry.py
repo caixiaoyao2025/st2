@@ -26,6 +26,16 @@ from typing import Any
 # list of acceptable values; omitted key = wildcard).
 DEFAULT_RULES: list[dict[str, Any]] = [
     {
+        # Biomni A1: prefer the native MCP path. Our canonical schemas are
+        # served by server.py over MCP, so tool registration makes ZERO LLM
+        # calls (no function_to_api_schema / schema conversion). Keep this rule
+        # above the generic `mcp` rule.
+        "name": "biomni-mcp",
+        "match": {"framework": "biomni"},
+        "adapter": "MCPAdapter",
+        "note": "Biomni A1 -- inject discovered tools via native add_mcp (0 LLM calls for registration).",
+    },
+    {
         "name": "mcp",
         "match": {"mcp": True},
         "adapter": "MCPAdapter",

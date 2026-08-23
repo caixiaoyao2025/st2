@@ -50,6 +50,8 @@ class {class_name}:
 
     __call__ = {method}
     func = {method}
+
+{class_name}._TOOL_SPEC = _TOOL_SPEC
 '''
 
 FUNCTION_WRAPPER_TEMPLATE = '''"""Auto-generated function wrapper for tool: {name}"""
@@ -61,6 +63,9 @@ _TOOL_SPEC = {spec_repr}
 def {func_name}({signature}) -> str:
     """{desc}"""
     return format_result(run_tool_spec(_TOOL_SPEC, {kwargs_dict}))
+
+
+{func_name}._TOOL_SPEC = _TOOL_SPEC
 '''
 
 

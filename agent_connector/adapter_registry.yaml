@@ -1,0 +1,57 @@
+# Adapter registry: the curated set of SUPPORTED agent interfaces.
+#
+# Policy: known interface -> auto-adapter. Unknown interface -> explicit error,
+# the user supplies an adapter. We do NOT guess a schema for unknown agents.
+#
+# Adding support for a new mainstream agent = append ONE rule here. The tool
+# discovery pipeline is untouched.
+#
+# Match keys (all optional; omitted = wildcard). A rule matches when EVERY
+# listed key equals (scalar) or is in (list) the detected interface field:
+#   framework            e.g. biomni, langchain, biochatter
+#   schema_format        mcp | function | structured_tool | langchain_tool
+#                         | openai_function | namespace | config | prompt
+#   registration_method  e.g. add_tool, add_mcp, bind_tools
+#   execution_method     e.g. go, run, invoke
+#   mcp / native_tool_calling / code_execution   (booleans from capabilities)
+
+adapters:
+  # Biomni A1: prefer the native MCP path. Our canonical schemas are served by
+  # server.py over MCP, so tool registration makes ZERO LLM calls (no
+  # function_to_api_schema / schema conversion). This is the clean integration:
+  # Discovery -> Canonical Schema -> Semantic Audit -> MCP Registry -> MCP
+  # Server -> agent.add_mcp() -> registration (no LLM) -> agent.go() -> LLM
+  # planner only. Keep this rule ABOVE the generic `mcp` rule.
+  - name: biomni-mcp
+    match:
+      framework: biomni
+    adapter: MCPAdapter
+    note: Biomni A1 -- inject discovered tools via native add_mcp (0 LLM calls for registration).
+
+  - name: mcp
+    match:
+      mcp: true
+    adapter: MCPAdapter
+    note: MCP-capable agents (Biomni A1, any agent with add_mcp).
+
+  - name: native-tool
+    match:
+      native_tool_calling: true
+    adapter: NativeToolAdapter
+    note: Agents that register callables (add_tool / tools.append / bind_tools /
+          StructuredTool) -- Biomni react, LangChain, OpenAI function calling.
+
+  - name: code-execution
+    match:
+      code_execution: true
+    adapter: CodeExecutionAdapter
+    note: Agents that execute generated code in a namespace (BioChatter).
+
+  # --- Template for a custom / not-yet-mainstream agent -------------------
+  # Copy this block, fill in the match, implement the adapter class in
+  # agent_connector/adapters.py (subclass BaseAdapter, implement connect()),
+  # and add its name to the table in adapter_registry._adapter_class.
+  # - name: my_custom_agent
+  #   match:
+  #     framework: myagent
+  #   adapter: MyAgentAdapter

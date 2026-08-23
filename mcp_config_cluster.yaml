@@ -1,5 +1,0 @@
-mcp_servers:
-  bio-mcp:
-    command:
-      - "python"
-      - "server.py"
