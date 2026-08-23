@@ -34,7 +34,10 @@ APP_ROOT = Path(os.environ.get("MCP_APP_ROOT", Path(__file__).resolve().parent))
 DATA_ROOT = Path(os.environ.get("MCP_DATA_ROOT", "/data")).resolve()
 REGISTRY_PATH = Path(os.environ.get("MCP_REGISTRY_PATH", APP_ROOT / "registry.yaml")).resolve()
 USER_REGISTRY_PATH = Path(
-    os.environ.get("MCP_USER_REGISTRY_PATH", DATA_ROOT / "mcp_registry.yaml")
+    os.environ.get(
+        "MCP_USER_REGISTRY_PATH",
+        APP_ROOT / "data" / "mcp_registry.yaml",
+    )
 ).resolve()
 TOOL_BIN_ROOT = Path(os.environ.get("MCP_TOOL_BIN_ROOT", DATA_ROOT / "mcp_tools" / "bin")).resolve()
 TOOL_VENV_ROOT = Path(
@@ -795,11 +798,27 @@ def register_tool_spec(spec: dict[str, Any]) -> bool:
 
 def load_and_register_registry() -> int:
     registry = load_effective_registry()
-    specs = validate_registry(registry)
+    specs = registry.get("tools", [])
+    if not isinstance(specs, list):
+        raise RegistryError("Registry key 'tools' must be a list.")
     registered_count = 0
     for spec in specs:
-        if register_tool_spec(spec):
-            registered_count += 1
+        name = spec.get("name") if isinstance(spec, dict) else None
+        try:
+            normalized = validate_tool_spec(spec, set(registry_cache))
+        except Exception as exc:
+            logger.error(
+                "Skipping tool %r: invalid registry spec (%s: %s). "
+                "Fix the tool's command/inputs in the registry.",
+                name, type(exc).__name__, exc,
+            )
+            continue
+        try:
+            if register_tool_spec(normalized):
+                registered_count += 1
+        except Exception as exc:
+            logger.exception("Skipping tool %r: failed to register: %s", name, exc)
+            continue
     return registered_count
 
 

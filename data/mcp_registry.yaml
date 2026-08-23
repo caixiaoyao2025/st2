@@ -1471,6 +1471,20 @@ tools:
       source: help_parsed
       flag: --ont-in
       takes_value: true
+    db:
+      type: string
+      description: 'KMA database path for kaptain species identification.'
+      required: false
+      source: help_parsed
+      flag: --db
+      takes_value: true
+    db_lookup:
+      type: string
+      description: 'KMA database lookup file path for kaptain.'
+      required: false
+      source: help_parsed
+      flag: --db-lookup
+      takes_value: true
     dir_working:
       type: path
       description: 'Working directory (default: /home/runner/work/scientif  ic_training2_cxy/scientific_training2_cxy/working)'
@@ -1753,7 +1767,12 @@ tools:
   output_control:
     intercept_large_output: true
     max_preview_lines: 50
-  inputs: {}
+  inputs:
+    subcommand:
+      type: string
+      description: 'seqmagick subcommand: convert, info, mogrify, quality-filter, extract-ids, backtrans-align.'
+      required: true
+      source: inferred
   resources: {}
   outputs:
     stdout:
