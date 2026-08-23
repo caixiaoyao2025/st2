@@ -247,6 +247,41 @@ class NativeToolAdapter(BaseAdapter):
                 if s.get("name"):
                     spec_by_name[s["name"]] = s
 
+        # ROBUST EXTRACTION: A1 calls function_to_api_schema(inspect.getsource(func)),
+        # and getsource(func) returns ONLY the `def` block -- the module-level
+        # `_TOOL_SPEC = {...}` assignment is NOT included. So parsing that string
+        # alone finds nothing. Instead, parse the FULL source of the generated
+        # wrapper module(s) (which DO contain every `_TOOL_SPEC = {...}`), and
+        # index by tool name. This works regardless of whether the wrapper object
+        # still carries the _TOOL_SPEC attribute after reload.
+        import inspect as _inspect
+        module_src = {}
+        for w in wrappers:
+            mod = _inspect.getmodule(w)
+            if mod is None or not getattr(mod, "__name__", ""):
+                continue
+            if mod.__name__ in module_src:
+                continue
+            try:
+                module_src[mod.__name__] = _inspect.getsource(mod)
+            except Exception:
+                continue
+        for src in module_src.values():
+            try:
+                mtree = _ast.parse(src)
+            except Exception:
+                continue
+            for node in mtree.body:
+                if isinstance(node, _ast.Assign):
+                    for t in node.targets:
+                        if isinstance(t, _ast.Name) and t.id == "_TOOL_SPEC":
+                            try:
+                                s = _ast.literal_eval(node.value)
+                            except Exception:
+                                s = None
+                            if isinstance(s, dict) and s.get("name"):
+                                spec_by_name[s["name"]] = s
+
         # Capture the ORIGINAL implementation before overriding every binding.
         _orig = next(iter(resolved.values())).function_to_api_schema
 
@@ -264,7 +299,8 @@ class NativeToolAdapter(BaseAdapter):
             """LLM-free fallback: build a parameter-name schema from the
             function signature when no _TOOL_SPEC is available."""
             params = []
-            for a in getattr(node, "args", None) or []:
+            arguments = getattr(node, "args", None)
+            for a in getattr(arguments, "args", []) or []:
                 if getattr(a, "arg", None):
                     params.append(a.arg)
             return params
