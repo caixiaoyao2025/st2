@@ -211,14 +211,34 @@ class NativeToolAdapter(BaseAdapter):
 
     def _maybe_patch_a1(self, agent: Any, wrappers) -> None:
         cls = (self.schema.get("agent_class") or type(agent).__name__).lower()
-        if "a1" not in cls and "biomni" not in (self.schema.get("module_path") or "").lower():
+        mod_path = (self.schema.get("module_path") or type(agent).__module__ or "").lower()
+        if "a1" not in cls and "biomni" not in mod_path:
             return
-        try:
-            import ast as _ast
-            import biomni.agent.a1 as _a1mod
-            import biomni.utils as _utilmod
-        except Exception:
+        # Resolve Biomni's modules from the ALREADY-imported process image (the
+        # agent object exists, so biomni is loaded). We deliberately avoid any
+        # literal `import biomni...` so the adapter stays framework-agnostic and
+        # never triggers a fresh biomni import outside an A1 session.
+        import sys, importlib
+        agent_mod_name = type(agent).__module__ or ""
+        candidate_mods = [agent_mod_name, "biomni.utils", "biomni.agent.a1"]
+        resolved = {}
+        for mname in candidate_mods:
+            m = sys.modules.get(mname)
+            if m is None:
+                try:
+                    m = importlib.import_module(mname)
+                except Exception:
+                    m = None
+            if m is not None and hasattr(m, "function_to_api_schema"):
+                resolved[mname] = m
+        if not resolved:
             return
+        import ast as _ast
+        # Build a name->spec index. Prefer a live _TOOL_SPEC attribute on the
+        # wrapper; if that is missing after reload, also record by wrapper name so
+        # the source-parse below can still match. We intentionally do NOT bail
+        # when this is empty -- the patch is applied regardless so that
+        # function_to_api_schema never calls the (broken) LLM schema generator.
         spec_by_name = {}
         for w in wrappers:
             s = getattr(w, "_TOOL_SPEC", None)
@@ -226,14 +246,28 @@ class NativeToolAdapter(BaseAdapter):
                 spec_by_name[getattr(w, "__name__", s.get("name"))] = s
                 if s.get("name"):
                     spec_by_name[s["name"]] = s
-        # CAUTION: only override Biomni's official function_to_api_schema when
-        # our OWN canonical wrappers are present. If a caller hands A1 ordinary
-        # functions (no _TOOL_SPEC), we leave the official behaviour intact so
-        # a future A1 version change cannot be silently broken by our patch.
-        if not spec_by_name:
-            return
-        # Capture the ORIGINAL implementation before overriding either binding.
-        _orig = _a1mod.function_to_api_schema
+
+        # Capture the ORIGINAL implementation before overriding every binding.
+        _orig = next(iter(resolved.values())).function_to_api_schema
+
+        def _ast_get_doc(node):
+            """Extract a function/class docstring from an ast node, if any."""
+            body = getattr(node, "body", None) or []
+            if body and isinstance(body[0], _ast.Expr):
+                try:
+                    return _ast.literal_eval(body[0].value)
+                except Exception:
+                    return None
+            return None
+
+        def _args_from_def(node):
+            """LLM-free fallback: build a parameter-name schema from the
+            function signature when no _TOOL_SPEC is available."""
+            params = []
+            for a in getattr(node, "args", None) or []:
+                if getattr(a, "arg", None):
+                    params.append(a.arg)
+            return params
 
         def _reliable(function_string, llm):
             spec = None
@@ -248,10 +282,28 @@ class NativeToolAdapter(BaseAdapter):
                                 except Exception:
                                     spec = None
                     elif isinstance(node, (_ast.FunctionDef, _ast.ClassDef)) and spec is None:
+                        # The wrapper source always carries `_TOOL_SPEC = {...}`
+                        # (see generator.py), but fall back to the name index or
+                        # the raw signature so we never hit the LLM path.
                         spec = spec_by_name.get(node.name)
+                        if spec is None:
+                            params = _args_from_def(node)
+                            if params:
+                                spec = {
+                                    "name": node.name,
+                                    "description": (
+                                        (_ast_get_doc(node) or "").strip()
+                                        or f"Auto-discovered tool {node.name}"
+                                    ),
+                                    "inputs": {p: {"required": True,
+                                                    "description": p} for p in params
+                                               if p not in ("kwargs",)},
+                                }
             except Exception:
                 spec = None
             if spec is None:
+                # Truly unknown function: fall back to official behaviour (last
+                # resort). This keeps the patch safe for non-our tools.
                 return _orig(function_string, llm)
             req, opt = [], []
             for p, m in (spec.get("inputs") or {}).items():
@@ -264,13 +316,12 @@ class NativeToolAdapter(BaseAdapter):
             return {"name": spec.get("name"), "description": spec.get("description", ""),
                     "required_parameters": req, "optional_parameters": opt}
 
-        # Patch BOTH bindings: a1.py may call `function_to_api_schema(...)` as a
-        # module global (from `from biomni.utils import function_to_api_schema`)
-        # OR `biomni.utils.function_to_api_schema(...)` qualified. Overriding the
-        # module attribute on biomni.utils covers the qualified call path; the
-        # a1 module attribute covers the unqualified one.
-        _utilmod.function_to_api_schema = _reliable
-        _a1mod.function_to_api_schema = _reliable
+        # Patch every module binding of function_to_api_schema: a1.py may call
+        # it as a module global (from `from biomni.utils import
+        # function_to_api_schema`) OR qualified as `biomni.utils....`. Cover all
+        # loaded modules that expose the attribute.
+        for m in resolved.values():
+            m.function_to_api_schema = _reliable
 
 
 class CodeExecutionAdapter(BaseAdapter):
