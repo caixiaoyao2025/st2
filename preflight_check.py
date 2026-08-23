@@ -36,6 +36,7 @@ if REPO not in sys.path:
 
 from tool_agent_test import validate_tool_schema, to_function_schemas  # noqa: E402
 from agent_connector.tool_spec import make_leaf_spec, validate_spec  # noqa: E402
+from agent_connector.semantic_audit import audit_tool, classify_tool  # noqa: E402
 
 REGISTRY = os.environ.get("REGISTRY", "data/mcp_registry.yaml")
 
@@ -53,9 +54,33 @@ def main() -> int:
 
     failures: list[str] = []
     n_ok = 0
+    n_active = 0
+    n_review = 0
+    n_rejected = 0
 
     for t in tools:
         name = t["name"]
+        # ---- gate 4 (semantic artifact contract) runs FIRST: a wrong artifact
+        #      inference (e.g. input declared binseq but the tool --help says
+        #      FASTA/FASTQ) must never reach the agent. rejected => hard fail;
+        #      needs_review => quarantined (not active), warn but do not fail. ----
+        try:
+            status = classify_tool(t)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"gate4 semantic-contract: {name}: classifier raised {exc}")
+            continue
+        if status == "rejected":
+            n_rejected += 1
+            sem = audit_tool(t)
+            detail = "; ".join(i.get("reason", "") for i in sem if i["severity"] == "rejected")[:400]
+            failures.append(f"gate4 semantic-contract REJECTED: {name}: {detail}")
+            continue
+        if status == "needs_review":
+            n_review += 1
+            sem = audit_tool(t)
+            detail = "; ".join(i.get("reason", "") for i in sem if i["severity"] == "needs_review")[:300]
+            print(f"  [gate4] {name}: NEEDS_REVIEW (quarantined, not active): {detail}")
+
         # ---- gate 1: real schema evidence (not a placeholder guess) ----
         ev = t.get("evidence") or {}
         if ev.get("inputs_source") == "placeholder":
@@ -188,7 +213,9 @@ def main() -> int:
     if audit.returncode != 0:
         failures.append("gate6 contract-audit:\n" + (audit.stdout or audit.stderr)[-1200:])
 
-    print(f"\n[preflight] {REGISTRY}: {len(tools)} tools, {n_ok} pass all gates")
+    print(f"\n[preflight] {REGISTRY}: {len(tools)} tools | "
+          f"active_pass_gates={n_ok} needs_review(quarantined)={n_review} "
+          f"rejected={n_rejected}")
     if failures:
         print("[PREFLIGHT FAIL] -- LLM test will NOT run. Broken at:")
         for f in failures:

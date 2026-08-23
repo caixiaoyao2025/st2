@@ -804,6 +804,22 @@ def load_and_register_registry() -> int:
     registered_count = 0
     for spec in specs:
         name = spec.get("name") if isinstance(spec, dict) else None
+        # Semantic gate: keep rejected / needs_review tools OUT of the active
+        # registry so the agent never sees a schema that failed the artifact
+        # contract audit (e.g. an input inferred as binseq while --help says
+        # FASTA/FASTQ). Import is best-effort so the server still boots if the
+        # audit module is unavailable.
+        try:
+            from agent_connector.semantic_audit import is_active as _is_active
+        except Exception:  # pragma: no cover - defensive
+            _is_active = lambda s: True
+        if not _is_active(spec):
+            logger.warning(
+                "Skipping tool %r: failed semantic artifact-contract audit "
+                "(quarantined: not active). Fix the artifact_type/evidence in the registry.",
+                name,
+            )
+            continue
         try:
             normalized = validate_tool_spec(spec, set(registry_cache))
         except Exception as exc:

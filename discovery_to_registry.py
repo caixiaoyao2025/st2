@@ -335,20 +335,30 @@ def infer_artifact_contract(tool_name: str, param_name: str,
       2. Tool+param specific rules (e.g. base bqtools input -> binseq)
       3. Param-name rules (e.g. cool_path -> cool_matrix)
       4. Description-based regex (fallback, lower confidence)
+
+    Every non-empty result also carries ``artifact_confidence`` and
+    ``artifact_source`` so the semantic-audit gate can quarantine low-confidence
+    guesses instead of feeding them to the agent as fact.
     """
+    def _meta(contract: dict, confidence: float, source: str) -> dict:
+        out = dict(contract)
+        out["artifact_confidence"] = confidence
+        out["artifact_source"] = source
+        return out
+
     # Layer 1: tool+subcommand+param specific (wins over base for encode etc.)
     if sub_name:
         key3 = (tool_name, sub_name, param_name)
         if key3 in _TOOL_PARAM_ARTIFACTS:
-            return dict(_TOOL_PARAM_ARTIFACTS[key3])
+            return _meta(_TOOL_PARAM_ARTIFACTS[key3], 1.0, "tool_specific_rule")
     # Layer 2: tool+param specific
     key = (tool_name, param_name)
     if key in _TOOL_PARAM_ARTIFACTS:
-        return dict(_TOOL_PARAM_ARTIFACTS[key])
+        return _meta(_TOOL_PARAM_ARTIFACTS[key], 1.0, "tool_specific_rule")
 
     # Layer 2: param-name rules
     if param_name in _PARAM_ARTIFACTS:
-        return dict(_PARAM_ARTIFACTS[param_name])
+        return _meta(_PARAM_ARTIFACTS[param_name], 0.9, "param_name_heuristic")
 
     # Layer 3: description-based regex
     import re as _re
@@ -367,7 +377,8 @@ def infer_artifact_contract(tool_name: str, param_name: str,
     ]
     for pat, artifact, exts in patterns:
         if _re.search(pat, text):
-            return {"artifact_type": artifact, "extensions": exts}
+            return _meta({"artifact_type": artifact, "extensions": exts},
+                         0.6, "description_regex")
     return {}
 
 
