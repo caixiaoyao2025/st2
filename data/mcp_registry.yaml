@@ -1,11 +1,7 @@
 tools:
 - name: bioemu
   type: cli
-  command: python -m bioemu.sample {sequence} {num_samples} {output_dir} --batch_size_100
-    {batch_size_100} --model_name {model_name} --ckpt_path {ckpt_path} --model_config_path
-    {model_config_path} --denoiser_type {denoiser_type} --denoiser_config {denoiser_config}
-    --cache_embeds_dir {cache_embeds_dir} --cache_so3_dir {cache_so3_dir} --msa_host_url
-    {msa_host_url} --filter_samples {filter_samples} --base_seed {base_seed}
+  command: python -m bioemu.sample {sequence} {num_samples} {output_dir} --batch_size_100 {batch_size_100} --model_name {model_name} --ckpt_path {ckpt_path} --model_config_path {model_config_path} --denoiser_type {denoiser_type} --denoiser_config {denoiser_config} --cache_embeds_dir {cache_embeds_dir} --cache_so3_dir {cache_so3_dir} --msa_host_url {msa_host_url} --filter_samples {filter_samples} --base_seed {base_seed}
   arg_style: python
   callable_via: python -m bioemu.sample
   readme_examples:
@@ -13,127 +9,105 @@ tools:
   - python -m bioemu.sample \
   - python -m bioemu.sidechain_relax --pdb-path path/to/topology.pdb --xtc-path path/to/samples.xtc
   readme_usage: python -m bioemu.sample
-  description: '[Auto-discovered] Inference code for scalable emulation of protein
-    equilibrium ensembles with generative deep learning (⭐867, Python) (license: LICENSE)'
+  description: '[Auto-discovered] Inference code for scalable emulation of protein equilibrium ensembles with generative deep learning (⭐867, Python) (license: LICENSE)'
   output_control:
     intercept_large_output: true
     max_preview_lines: 50
   inputs:
     batch_size_100:
       type: int
-      description: Batch size you'd use for a sequence of length 100. The batch size
-        will be calculated from this, assuming that the memory requirement to compute
-        each sample scales quadratically with the sequence length.
+      description: Batch size you'd use for a sequence of length 100. The batch size will be calculated from this, assuming that the memory requirement to compute each sample scales quadratically with the sequence length.
       required: false
       source: help_parsed
       flag: --batch_size_100
       takes_value: true
     model_name:
       type: path
-      description: Name of pretrained model to use. If this is set, you do not need
-        to provide `ckpt_path` or `model_config_path`.
+      description: Name of pretrained model to use. If this is set, you do not need to provide `ckpt_path` or `model_config_path`.
       required: false
       source: help_parsed
       flag: --model_name
       takes_value: true
     ckpt_path:
       type: path
-      description: Path to the model checkpoint. If this is set, `model_name` will
-        be ignored.
+      description: Path to the model checkpoint. If this is set, `model_name` will be ignored.
       required: false
       source: help_parsed
       flag: --ckpt_path
       takes_value: true
     model_config_path:
       type: path
-      description: Path to the model config, defining score model architecture and
-        the corruption process the model was trained with. Only required if `ckpt_path`
-        is set.
+      description: Path to the model config, defining score model architecture and the corruption process the model was trained with. Only required if `ckpt_path` is set.
       required: false
       source: help_parsed
       flag: --model_config_path
       takes_value: true
     denoiser_type:
       type: string
-      description: Denoiser to use for sampling, if `denoiser_config` not specified.
-        Comes in with default parameter configuration. Must be one of ['dpm', 'heun']
+      description: Denoiser to use for sampling, if `denoiser_config` not specified. Comes in with default parameter configuration. Must be one of ['dpm', 'heun']
       required: false
       source: help_parsed
       flag: --denoiser_type
       takes_value: true
     denoiser_config:
       type: path
-      description: Path (str or :class:`os.PathLike`) to a denoiser config YAML, or
-        a dict. For steered sampling, pass a steering config (e.g., config/steering/physical_steering.yaml)
-        which includes the denoiser target, potentials, and steering parameters in
-        one file.
+      description: Path (str or :class:`os.PathLike`) to a denoiser config YAML, or a dict. For steered sampling, pass a steering config (e.g., config/steering/physical_steering.yaml) which includes the denoiser target, potentials, and steering parameters in one file.
       required: false
       source: help_parsed
       flag: --denoiser_config
       takes_value: true
     cache_embeds_dir:
       type: path
-      description: Directory to store MSA embeddings. If not set, this defaults to
-        `COLABFOLD_DIR/embeds_cache`.
+      description: Directory to store MSA embeddings. If not set, this defaults to `COLABFOLD_DIR/embeds_cache`.
       required: false
       source: help_parsed
       flag: --cache_embeds_dir
       takes_value: true
     cache_so3_dir:
       type: path
-      description: Directory to store SO3 precomputations. If not set, this defaults
-        to `~/sampling_so3_cache`.
+      description: Directory to store SO3 precomputations. If not set, this defaults to `~/sampling_so3_cache`.
       required: false
       source: help_parsed
       flag: --cache_so3_dir
       takes_value: true
     msa_host_url:
       type: string
-      description: MSA server URL. If not set, this defaults to colabfold's remote
-        server. If sequence is an a3m file, this is ignored.
+      description: MSA server URL. If not set, this defaults to colabfold's remote server. If sequence is an a3m file, this is ignored.
       required: false
       source: help_parsed
       flag: --msa_host_url
       takes_value: true
     filter_samples:
       type: boolean
-      description: Filter out unphysical samples with e.g. long bond distances or
-        steric clashes.
+      description: Filter out unphysical samples with e.g. long bond distances or steric clashes.
       required: false
       source: help_parsed
       flag: --filter_samples
       takes_value: false
     base_seed:
       type: string
-      description: Base random seed for sampling. If set, each batch's seed will be
-        set to base_seed + (num samples already generated).
+      description: Base random seed for sampling. If set, each batch's seed will be set to base_seed + (num samples already generated).
       required: false
       source: help_parsed
       flag: --base_seed
       takes_value: true
     sequence:
       type: path
-      description: Amino acid sequence for which to generate samples, or a path to
-        a .fasta file, or a path to an .a3m file with MSAs. If it is not an a3m file,
-        then colabfold will be used to generate an MSA and embedding.
+      description: Amino acid sequence for which to generate samples, or a path to a .fasta file, or a path to an .a3m file with MSAs. If it is not an a3m file, then colabfold will be used to generate an MSA and embedding.
       required: true
       source: help_parsed
       positional: true
       position: 0
     num_samples:
       type: int
-      description: Number of samples to generate. If `output_dir` already contains
-        samples, this function will only generate additional samples necessary to
-        reach the specified `num_samples`.
+      description: Number of samples to generate. If `output_dir` already contains samples, this function will only generate additional samples necessary to reach the specified `num_samples`.
       required: true
       source: help_parsed
       positional: true
       position: 1
     output_dir:
       type: path
-      description: Directory to save the samples. Each batch of samples will initially
-        be dumped as .npz files. Once all batches are sampled, they will be converted
-        to .xtc and .pdb.
+      description: Directory to save the samples. Each batch of samples will initially be dumped as .npz files. Once all batches are sampled, they will be converted to .xtc and .pdb.
       required: true
       source: help_parsed
       positional: true
@@ -142,9 +116,7 @@ tools:
   outputs:
     output_dir:
       type: directory
-      description: Directory to save the samples. Each batch of samples will initially
-        be dumped as .npz files. Once all batches are sampled, they will be converted
-        to .xtc and .pdb.
+      description: Directory to save the samples. Each batch of samples will initially be dumped as .npz files. Once all batches are sampled, they will be converted to .xtc and .pdb.
       input: output_dir
       source: help_parsed
   execution: null
@@ -220,60 +192,47 @@ tools:
     params_schema:
     - name: --batch_size_100
       type: int
-      description: Batch size you'd use for a sequence of length 100. The batch size
-        will be calculated from this, assuming that the memory requirement to compute
-        each sample scales quadratically with the sequence length.
+      description: Batch size you'd use for a sequence of length 100. The batch size will be calculated from this, assuming that the memory requirement to compute each sample scales quadratically with the sequence length.
       required: false
       takes_value: true
     - name: --model_name
       type: path
-      description: Name of pretrained model to use. If this is set, you do not need
-        to provide `ckpt_path` or `model_config_path`.
+      description: Name of pretrained model to use. If this is set, you do not need to provide `ckpt_path` or `model_config_path`.
       required: false
       takes_value: true
     - name: --ckpt_path
       type: path
-      description: Path to the model checkpoint. If this is set, `model_name` will
-        be ignored.
+      description: Path to the model checkpoint. If this is set, `model_name` will be ignored.
       required: false
       takes_value: true
     - name: --model_config_path
       type: path
-      description: Path to the model config, defining score model architecture and
-        the corruption process the model was trained with. Only required if `ckpt_path`
-        is set.
+      description: Path to the model config, defining score model architecture and the corruption process the model was trained with. Only required if `ckpt_path` is set.
       required: false
       takes_value: true
     - name: --denoiser_type
       type: string
-      description: Denoiser to use for sampling, if `denoiser_config` not specified.
-        Comes in with default parameter configuration. Must be one of ['dpm', 'heun']
+      description: Denoiser to use for sampling, if `denoiser_config` not specified. Comes in with default parameter configuration. Must be one of ['dpm', 'heun']
       required: false
       takes_value: true
     - name: --denoiser_config
       type: path
-      description: Path (str or :class:`os.PathLike`) to a denoiser config YAML, or
-        a dict. For steered sampling, pass a steering config (e.g., config/steering/physical_steering.yaml)
-        which includes the denoiser target, potentials, and steering parameters in
-        one file.
+      description: Path (str or :class:`os.PathLike`) to a denoiser config YAML, or a dict. For steered sampling, pass a steering config (e.g., config/steering/physical_steering.yaml) which includes the denoiser target, potentials, and steering parameters in one file.
       required: false
       takes_value: true
     - name: --cache_embeds_dir
       type: path
-      description: Directory to store MSA embeddings. If not set, this defaults to
-        `COLABFOLD_DIR/embeds_cache`.
+      description: Directory to store MSA embeddings. If not set, this defaults to `COLABFOLD_DIR/embeds_cache`.
       required: false
       takes_value: true
     - name: --cache_so3_dir
       type: path
-      description: Directory to store SO3 precomputations. If not set, this defaults
-        to `~/sampling_so3_cache`.
+      description: Directory to store SO3 precomputations. If not set, this defaults to `~/sampling_so3_cache`.
       required: false
       takes_value: true
     - name: --msa_host_url
       type: string
-      description: MSA server URL. If not set, this defaults to colabfold's remote
-        server. If sequence is an a3m file, this is ignored.
+      description: MSA server URL. If not set, this defaults to colabfold's remote server. If sequence is an a3m file, this is ignored.
       required: false
       takes_value: true
       choices:
@@ -281,16 +240,14 @@ tools:
       - None
     - name: --filter_samples
       type: boolean
-      description: Filter out unphysical samples with e.g. long bond distances or
-        steric clashes.
+      description: Filter out unphysical samples with e.g. long bond distances or steric clashes.
       required: false
       takes_value: false
       aliases:
       - -f
     - name: --base_seed
       type: string
-      description: Base random seed for sampling. If set, each batch's seed will be
-        set to base_seed + (num samples already generated).
+      description: Base random seed for sampling. If set, each batch's seed will be set to base_seed + (num samples already generated).
       required: false
       takes_value: true
       choices:
@@ -298,50 +255,38 @@ tools:
       - None
     - name: sequence
       type: path
-      description: Amino acid sequence for which to generate samples, or a path to
-        a .fasta file, or a path to an .a3m file with MSAs. If it is not an a3m file,
-        then colabfold will be used to generate an MSA and embedding.
+      description: Amino acid sequence for which to generate samples, or a path to a .fasta file, or a path to an .a3m file with MSAs. If it is not an a3m file, then colabfold will be used to generate an MSA and embedding.
       required: true
       positional: true
       position: 0
     - name: num_samples
       type: int
-      description: Number of samples to generate. If `output_dir` already contains
-        samples, this function will only generate additional samples necessary to
-        reach the specified `num_samples`.
+      description: Number of samples to generate. If `output_dir` already contains samples, this function will only generate additional samples necessary to reach the specified `num_samples`.
       required: true
       positional: true
       position: 1
     - name: output_dir
       type: path
-      description: Directory to save the samples. Each batch of samples will initially
-        be dumped as .npz files. Once all batches are sampled, they will be converted
-        to .xtc and .pdb.
+      description: Directory to save the samples. Each batch of samples will initially be dumped as .npz files. Once all batches are sampled, they will be converted to .xtc and .pdb.
       required: true
       positional: true
       position: 2
     exec_positional_args:
     - name: sequence
       type: path
-      description: Amino acid sequence for which to generate samples, or a path to
-        a .fasta file, or a path to an .a3m file with MSAs. If it is not an a3m file,
-        then colabfold will be used to generate an MSA and embedding.
+      description: Amino acid sequence for which to generate samples, or a path to a .fasta file, or a path to an .a3m file with MSAs. If it is not an a3m file, then colabfold will be used to generate an MSA and embedding.
       required: true
       positional: true
       position: 0
     - name: num_samples
       type: int
-      description: Number of samples to generate. If `output_dir` already contains
-        samples, this function will only generate additional samples necessary to
-        reach the specified `num_samples`.
+      description: Number of samples to generate. If `output_dir` already contains samples, this function will only generate additional samples necessary to reach the specified `num_samples`.
       required: true
       positional: true
       position: 1
     - name: output_dir
       type: path
-      description: Directory to save the samples. Each batch of samples will initially
-        be dumped as .npz files. Once all batches are sampled, they will be converted
-        to .xtc and .pdb.
+      description: Directory to save the samples. Each batch of samples will initially be dumped as .npz files. Once all batches are sampled, they will be converted to .xtc and .pdb.
       required: true
       positional: true
       position: 2
@@ -426,6 +371,7 @@ tools:
     - nvidia-nvjitlink==13.3.33
     - nvidia-nvshmem-cu13==3.4.5
     - nvidia-nvtx==13.0.85
+  status: active
 - name: bqtools
   type: cli
   command: bqtools {subcommand}
@@ -433,8 +379,7 @@ tools:
   callable_via: ''
   readme_examples: []
   readme_usage: ''
-  description: '[Auto-discovered] A command line utilty for working with BINSEQ files
-    (⭐39, Rust) (NO license - research use only)'
+  description: '[Auto-discovered] A command line utilty for working with BINSEQ files (⭐39, Rust) (NO license - research use only)'
   output_control:
     intercept_large_output: true
     max_preview_lines: 50
@@ -442,8 +387,7 @@ tools:
     subcommand:
       type: string
       required: true
-      description: 'Subcommand to run. One of: encode, decode, cat, info, grep, sample,
-        split, pipe, revcomp, verify'
+      description: 'Subcommand to run. One of: encode, decode, cat, info, grep, sample, split, pipe, revcomp, verify'
   resources: {}
   outputs:
     stdout:
@@ -493,8 +437,7 @@ tools:
         - -I
       - name: --recursive
         type: boolean
-        description: Apply encoding to all fasta/fastq files in the provided directory
-          input.
+        description: Apply encoding to all fasta/fastq files in the provided directory input.
         required: false
         takes_value: false
         aliases:
@@ -503,6 +446,8 @@ tools:
         extensions:
         - .fastq
         - .fq
+        artifact_confidence: 0.6
+        artifact_source: description_regex
       - name: --manifest
         type: path
         description: Path to a text file containing a list of input files to process.
@@ -512,22 +457,19 @@ tools:
         - -M
       - name: --depth
         type: int
-        description: Maximum depth in the directory tree to process. Leaving this
-          option empty will set no limit
+        description: Maximum depth in the directory tree to process. Leaving this option empty will set no limit
         required: false
         takes_value: true
       - name: --paired
         type: boolean
-        description: Encode *{_R1,_R2}* record pairs. Ignored unless `--manifest`
-          or `--recursive` is specified
+        description: Encode *{_R1,_R2}* record pairs. Ignored unless `--manifest` or `--recursive` is specified
         required: false
         takes_value: false
         aliases:
         - -P
       - name: --collate
         type: boolean
-        description: Collate all input files into a single output file. Will respect
-          paired records if `--paired` is specified
+        description: Collate all input files into a single output file. Will respect paired records if `--paired` is specified
         required: false
         takes_value: false
         aliases:
@@ -597,9 +539,7 @@ tools:
         - -T
       - name: --level
         type: int
-        description: Zstd compression level The compression level is between 1 and
-          22, with 3 being the default. Higher levels provide better compression at
-          the cost of speed. Level 0 disables compression.
+        description: Zstd compression level The compression level is between 1 and 22, with 3 being the default. Higher levels provide better compression at the cost of speed. Level 0 disables compression.
         required: false
         takes_value: true
         aliases:
@@ -628,6 +568,8 @@ tools:
         - .fasta
         - .fq
         - .fastq
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools encode [OPTIONS] [INPUT]...
       outputs:
         output:
@@ -640,8 +582,7 @@ tools:
       params:
       - name: --span
         type: string
-        description: Span of records to process. If not specified, all records will
-          be processed
+        description: Span of records to process. If not specified, all records will be processed
         required: false
         takes_value: true
       - name: --output
@@ -698,6 +639,8 @@ tools:
         - .vbq
         - .cbq
         - .bq
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools decode [OPTIONS] <INPUT>
       outputs:
         output:
@@ -773,9 +716,7 @@ tools:
         - -T
       - name: --level
         type: int
-        description: Zstd compression level The compression level is between 1 and
-          22, with 3 being the default. Higher levels provide better compression at
-          the cost of speed. Level 0 disables compression.
+        description: Zstd compression level The compression level is between 1 and 22, with 3 being the default. Higher levels provide better compression at the cost of speed. Level 0 disables compression.
         required: false
         takes_value: true
         aliases:
@@ -800,6 +741,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools cat [OPTIONS] [INPUT]...
       outputs:
         output:
@@ -842,6 +785,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools info [OPTIONS] <INPUT>...
       outputs:
         stdout:
@@ -853,8 +798,7 @@ tools:
       params:
       - name: --span
         type: string
-        description: Span of records to process. If not specified, all records will
-          be processed
+        description: Span of records to process. If not specified, all records will be processed
         required: false
         takes_value: true
       - name: --output
@@ -989,6 +933,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       - name: reg
         type: string
         description: Positional argument REG
@@ -1002,14 +948,12 @@ tools:
           description: Output file
           input: output
           source: help_parsed
-      description: Search BINSEQ records by sequence pattern and write matches to
-        output.
+      description: Search BINSEQ records by sequence pattern and write matches to output.
     sample:
       params:
       - name: --span
         type: string
-        description: Span of records to process. If not specified, all records will
-          be processed
+        description: Span of records to process. If not specified, all records will be processed
         required: false
         takes_value: true
       - name: --output
@@ -1077,6 +1021,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools sample [OPTIONS] --fraction <FRACTION> <INPUT>
       outputs:
         output:
@@ -1089,14 +1035,12 @@ tools:
       params:
       - name: --span
         type: string
-        description: Span of records to process. If not specified, all records will
-          be processed
+        description: Span of records to process. If not specified, all records will be processed
         required: false
         takes_value: true
       - name: --basepath
         type: path
-        description: Optional base path for output files. If not provided, the current
-          working directory will be used
+        description: Optional base path for output files. If not provided, the current working directory will be used
         required: false
         takes_value: true
       - name: --skip-unmatched
@@ -1145,8 +1089,7 @@ tools:
         takes_value: false
       - name: --file
         type: path
-        description: File of patterns to search for in either primary or extended
-          sequence
+        description: File of patterns to search for in either primary or extended sequence
         required: false
         takes_value: true
       - name: --sfile
@@ -1167,6 +1110,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools split [OPTIONS] <INPUT>
       outputs:
         stdout:
@@ -1183,8 +1128,7 @@ tools:
       params:
       - name: --span
         type: string
-        description: Span of records to process. If not specified, all records will
-          be processed
+        description: Span of records to process. If not specified, all records will be processed
         required: false
         takes_value: true
       - name: --num-pipes
@@ -1231,6 +1175,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools pipe [OPTIONS] <INPUT>
       outputs:
         stdout:
@@ -1245,8 +1191,7 @@ tools:
       params:
       - name: --span
         type: string
-        description: Span of records to process. If not specified, all records will
-          be processed
+        description: Span of records to process. If not specified, all records will be processed
         required: false
         takes_value: true
       - name: --output
@@ -1314,9 +1259,7 @@ tools:
         - -T
       - name: --level
         type: int
-        description: Zstd compression level The compression level is between 1 and
-          22, with 3 being the default. Higher levels provide better compression at
-          the cost of speed. Level 0 disables compression.
+        description: Zstd compression level The compression level is between 1 and 22, with 3 being the default. Higher levels provide better compression at the cost of speed. Level 0 disables compression.
         required: false
         takes_value: true
         aliases:
@@ -1348,6 +1291,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools revcomp [OPTIONS] <INPUT>
       outputs:
         output:
@@ -1360,8 +1305,7 @@ tools:
       params:
       - name: --span
         type: string
-        description: Span of records to process. If not specified, all records will
-          be processed
+        description: Span of records to process. If not specified, all records will be processed
         required: false
         takes_value: true
       - name: --skip-seq
@@ -1413,6 +1357,8 @@ tools:
         position: 0
         artifact_type: binseq
         extensions: *id002
+        artifact_confidence: 1.0
+        artifact_source: tool_specific_rule
       usage: bqtools verify [OPTIONS] <INPUT>
       outputs:
         stdout:
@@ -1427,16 +1373,14 @@ tools:
     system_commands:
     - command: cargo
       kind: system_missing
-      install_hint: 'bqtools is a Rust binary; install the Rust toolchain first: curl
-        --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
+      install_hint: 'bqtools is a Rust binary; install the Rust toolchain first: curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
     python_packages: []
     declared_packages: []
     missing_deps: []
     venv_path: /tmp/execute_ev584vb0/venv
   evidence:
     exec_status: passed
-    exec_reason: '`/tmp/execute_ev584vb0/bqtools/target/release/bqtools --help` ->
-      exit 0'
+    exec_reason: '`/tmp/execute_ev584vb0/bqtools/target/release/bqtools --help` -> exit 0'
     exec_executable: bqtools
     verified_license: false
     verified_status: repo_ok
@@ -1449,17 +1393,55 @@ tools:
       takes_value: false
       aliases:
       - -V
+  status: active
+  artifact_contract:
+    inputs:
+      encode.--recursive: fastq
+      encode.input: fasta
+      decode.input: binseq
+      cat.input: binseq
+      info.input: binseq
+      grep.input: binseq
+      sample.input: binseq
+      split.input: binseq
+      pipe.input: binseq
+      revcomp.input: binseq
+      verify.input: binseq
+    outputs: {}
+  artifact_confidence:
+    inputs:
+      encode.--recursive: 0.6
+      encode.input: 1.0
+      decode.input: 1.0
+      cat.input: 1.0
+      info.input: 1.0
+      grep.input: 1.0
+      sample.input: 1.0
+      split.input: 1.0
+      pipe.input: 1.0
+      revcomp.input: 1.0
+      verify.input: 1.0
+  artifact_source:
+    inputs:
+      encode.--recursive: description_regex
+      encode.input: tool_specific_rule
+      decode.input: tool_specific_rule
+      cat.input: tool_specific_rule
+      info.input: tool_specific_rule
+      grep.input: tool_specific_rule
+      sample.input: tool_specific_rule
+      split.input: tool_specific_rule
+      pipe.input: tool_specific_rule
+      revcomp.input: tool_specific_rule
+      verify.input: tool_specific_rule
 - name: kaptain
   type: cli
-  command: kaptain --ont-in {ont_in} --db {db} --db-lookup {db_lookup} --dir-working
-    {dir_working} --output {output} --output-html {output_html} --subsampling {subsampling}
-    --fdr {fdr} --threads {threads} --version {version} --log {log}
+  command: kaptain --ont-in {ont_in} --db {db} --db-lookup {db_lookup} --dir-working {dir_working} --output {output} --output-html {output_html} --subsampling {subsampling} --fdr {fdr} --threads {threads} --version {version} --log {log}
   arg_style: positional
   callable_via: ''
   readme_examples: []
   readme_usage: ''
-  description: Identify metagenomic species from Oxford Nanopore (ONT) sequencing
-    reads using KMA database alignment.
+  description: Identify metagenomic species from Oxford Nanopore (ONT) sequencing reads using KMA database alignment.
   output_control:
     intercept_large_output: true
     max_preview_lines: 50
@@ -1473,14 +1455,14 @@ tools:
       takes_value: true
     db:
       type: string
-      description: 'KMA database path for kaptain species identification.'
+      description: KMA database path for kaptain species identification.
       required: false
       source: help_parsed
       flag: --db
       takes_value: true
     db_lookup:
       type: string
-      description: 'KMA database lookup file path for kaptain.'
+      description: KMA database lookup file path for kaptain.
       required: false
       source: help_parsed
       flag: --db-lookup
@@ -1508,8 +1490,7 @@ tools:
       takes_value: true
     subsampling:
       type: string
-      description: 'Subsample input to number of bases before  classification. Leave
-        empty or use None for no  downsampling. (default: [None])'
+      description: 'Subsample input to number of bases before  classification. Leave empty or use None for no  downsampling. (default: [None])'
       required: false
       source: help_parsed
       flag: --subsampling
@@ -1547,8 +1528,7 @@ tools:
       required: true
       required_by: runtime
       source: help_parsed
-      description: 'Basename of KMA database. Database exists of four  files named
-        *.{comp.b, length.b, name, seq.b}  (default: None)'
+      description: 'Basename of KMA database. Database exists of four  files named *.{comp.b, length.b, name, seq.b}  (default: None)'
     db_lookup:
       required: true
       required_by: runtime
@@ -1621,8 +1601,7 @@ tools:
       - -i
     - name: --db
       type: path
-      description: 'Basename of KMA database. Database exists of four  files named
-        *.{comp.b, length.b, name, seq.b}  (default: None)'
+      description: 'Basename of KMA database. Database exists of four  files named *.{comp.b, length.b, name, seq.b}  (default: None)'
       required: true
       takes_value: true
     - name: --db-lookup
@@ -1649,8 +1628,7 @@ tools:
       takes_value: true
     - name: --subsampling
       type: string
-      description: 'Subsample input to number of bases before  classification. Leave
-        empty or use None for no  downsampling. (default: [None])'
+      description: 'Subsample input to number of bases before  classification. Leave empty or use None for no  downsampling. (default: [None])'
       required: false
       takes_value: true
       choices:
@@ -1755,6 +1733,7 @@ tools:
   expected_outputs:
   - name: output_html
     render_as: text
+  status: active
 - name: seqmagick
   type: cli
   arg_style: subcommand
@@ -1762,8 +1741,7 @@ tools:
   callable_via: ''
   readme_examples: []
   readme_usage: ''
-  description: '[Auto-discovered] Manipulate sequence files (convert formats, summarize,
-    filter, transform) - pure-Python, pip-installable. (python)'
+  description: '[Auto-discovered] Manipulate sequence files (convert formats, summarize, filter, transform) - pure-Python, pip-installable. (python)'
   output_control:
     intercept_large_output: true
     max_preview_lines: 50
@@ -1791,11 +1769,7 @@ tools:
   - backtrans-align
   subcommand_details:
     convert:
-      description: 'Reverse complement a FASTA file: produce the reverse complement
-        of each sequence and write it to the output file. Also converts between sequence
-        formats (FASTA/FASTQ/CLU/PHYLIP/NEXUS/EMBL). This is the pure-Python, pip-installable
-        way to reverse complement sequences - no Rust/cargo toolchain required (unlike
-        bqtools revcomp).'
+      description: 'Reverse complement a FASTA file: produce the reverse complement of each sequence and write it to the output file. Also converts between sequence formats (FASTA/FASTQ/CLU/PHYLIP/NEXUS/EMBL). This is the pure-Python, pip-installable way to reverse complement sequences - no Rust/cargo toolchain required (unlike bqtools revcomp).'
       params:
       - name: source_file
         type: path
@@ -1832,8 +1806,7 @@ tools:
         - protein
       - name: --reverse-complement
         type: boolean
-        description: Reverse complement the sequences (writes the reverse complement
-          of each input sequence)
+        description: Reverse complement the sequences (writes the reverse complement of each input sequence)
         required: false
         takes_value: false
       outputs:
@@ -1843,9 +1816,7 @@ tools:
           input: dest_file
           source: help_parsed
     info:
-      description: Summarize one or more sequence files - report the number of sequences,
-        the total length (total number of bases), and per-sequence statistics. Use
-        this to count sequences and compute the total length of a FASTA file.
+      description: Summarize one or more sequence files - report the number of sequences, the total length (total number of bases), and per-sequence statistics. Use this to count sequences and compute the total length of a FASTA file.
       params:
       - name: sequence_files
         type: path
@@ -1892,3 +1863,4 @@ tools:
     declared_packages: []
     missing_deps: []
     venv_path: ''
+  status: active

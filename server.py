@@ -813,6 +813,18 @@ def load_and_register_registry() -> int:
             from agent_connector.semantic_audit import is_active as _is_active
         except Exception:  # pragma: no cover - defensive
             _is_active = lambda s: True
+        # Registry is the single source of truth: a persisted non-active status
+        # (needs_review / rejected) is honored directly. Only when the status is
+        # missing (legacy registry) or 'active' do we recompute as a safety backstop
+        # so a stale/missing status can never admit a schema that fails the audit.
+        persisted = spec.get("status")
+        if persisted in ("needs_review", "rejected"):
+            logger.warning(
+                "Skipping tool %r: registry status=%s (quarantined, not active). "
+                "Run `python -m agent_connector.registry_status` to see the reason.",
+                name, persisted,
+            )
+            continue
         if not _is_active(spec):
             logger.warning(
                 "Skipping tool %r: failed semantic artifact-contract audit "

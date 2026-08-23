@@ -241,27 +241,44 @@ _FLAG_RE = re.compile(r"^--?[A-Za-z0-9][A-Za-z0-9_-]*", re.MULTILINE)
 
 
 def execution_contract_check(tool: dict) -> list[dict]:
-    """Best-effort: verify declared flags exist in the tool's --help output."""
+    """Best-effort: verify declared flags exist in the tool's --help output.
+
+    Only meaningful when the tool is actually installed. If ``--help`` is
+    unavailable (binary missing, or it errors), we SKIP -- we never downgrade a
+    tool's status on an un-runnable audit. A failed/empty help is not evidence
+    of a bad schema.
+    """
     issues: list[dict] = []
     command = tool.get("command") or ""
     if not command:
         return issues
-    exe = command.strip().split()[0]
+    # Runnable base command: drop {placeholders} (e.g. `python -m bioemu.sample`).
+    base = [b for b in re.sub(r"\{[^}]*\}", "", command).split() if b]
+    if not base:
+        return issues
+    exe = base[0]
     if not shutil.which(exe):
-        return issues  # cannot audit without the binary; skip silently
+        return issues  # binary not installed here -> cannot audit; skip
 
-    def _help_text(*args: str) -> str:
+    def _help_text(*extra: str) -> str | None:
         try:
-            out = subprocess.run([exe, *args, "--help"], capture_output=True,
-                                 text=True, errors="replace", timeout=30)
-            return (out.stdout or "") + (out.stderr or "")
+            proc = subprocess.run([*base, *extra, "--help"], capture_output=True,
+                                  text=True, errors="replace", timeout=30)
         except Exception:
-            return ""
+            return None
+        if proc.returncode != 0:
+            return None
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return out if out.strip() else None
 
-    base_help = _help_text()
+    help_text = _help_text() or ""
     subs = tool.get("subcommands") or list((tool.get("subcommand_details") or {}).keys())
     for sub in subs:
-        base_help += "\n" + _help_text(sub)
+        h = _help_text(sub)
+        if h:
+            help_text += "\n" + h
+    if not help_text:
+        return issues  # --help unavailable -> skip, do not quarantine
 
     declared_flags = set()
     for p in (tool.get("inputs") or {}).values():
@@ -274,13 +291,13 @@ def execution_contract_check(tool: dict) -> list[dict]:
             if f:
                 declared_flags.add(f.lstrip("-").split("=")[0])
 
-    help_flags = {m.group(0).lstrip("-").split("=")[0] for m in _FLAG_RE.finditer(base_help)}
+    help_flags = {m.group(0).lstrip("-").split("=")[0] for m in _FLAG_RE.finditer(help_text)}
     missing = sorted(f for f in declared_flags if f and f not in help_flags)
     if missing:
         issues.append({
             "severity": "needs_review",
             "reason": f"declared flags not found in --help output: {missing}",
-            "evidence": f"{exe} --help",
+            "evidence": " ".join([*base, "--help"]),
         })
     return issues
 
