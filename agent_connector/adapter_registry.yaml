@@ -16,17 +16,18 @@
 #   mcp / native_tool_calling / code_execution   (booleans from capabilities)
 
 adapters:
-  # Biomni A1: prefer the native MCP path. Our canonical schemas are served by
-  # server.py over MCP, so tool registration makes ZERO LLM calls (no
-  # function_to_api_schema / schema conversion). This is the clean integration:
-  # Discovery -> Canonical Schema -> Semantic Audit -> MCP Registry -> MCP
-  # Server -> agent.add_mcp() -> registration (no LLM) -> agent.go() -> LLM
-  # planner only. Keep this rule ABOVE the generic `mcp` rule.
-  - name: biomni-mcp
+  # Biomni A1 is a CODE-EXECUTION agent: its go() generates <execute> code
+  # blocks that call functions from its execution namespace, NOT tool-calls.
+  # So tools must be registered into that namespace (via add_tool -> A1's
+  # _biomni_custom_functions), not merely exposed over MCP (which A1's planner
+  # will not invoke). We use NativeToolAdapter and patch A1's schema parser so
+  # add_tool() builds the schema from our _TOOL_SPEC directly -- ZERO LLM calls,
+  # no function_to_api_schema / 402. Keep this rule ABOVE the generic `mcp` rule.
+  - name: biomni-native
     match:
       framework: biomni
-    adapter: MCPAdapter
-    note: Biomni A1 -- inject discovered tools via native add_mcp (0 LLM calls for registration).
+    adapter: NativeToolAdapter
+    note: Biomni A1 -- inject wrapper functions into its code-execution namespace (LLM-free schema via _TOOL_SPEC patch).
 
   - name: mcp
     match:

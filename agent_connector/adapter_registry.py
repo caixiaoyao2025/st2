@@ -26,14 +26,17 @@ from typing import Any
 # list of acceptable values; omitted key = wildcard).
 DEFAULT_RULES: list[dict[str, Any]] = [
     {
-        # Biomni A1: prefer the native MCP path. Our canonical schemas are
-        # served by server.py over MCP, so tool registration makes ZERO LLM
-        # calls (no function_to_api_schema / schema conversion). Keep this rule
-        # above the generic `mcp` rule.
-        "name": "biomni-mcp",
+        # Biomni A1 is a CODE-EXECUTION agent: its go() generates <execute>
+        # code blocks that call functions from its execution namespace. Tools
+        # must therefore be registered via add_tool into that namespace (NOT
+        # merely MCP-exposed), so A1's own planner can call them by name.
+        # _maybe_patch_a1 overrides function_to_api_schema with our _TOOL_SPEC
+        # so registration makes ZERO LLM calls. Keep above the generic rules.
+        "name": "biomni-native",
         "match": {"framework": "biomni"},
-        "adapter": "MCPAdapter",
-        "note": "Biomni A1 -- inject discovered tools via native add_mcp (0 LLM calls for registration).",
+        "adapter": "NativeToolAdapter",
+        "note": "Biomni A1 -- inject discovered tools via native add_tool "
+                "into its execution namespace (LLM-free via _TOOL_SPEC patch).",
     },
     {
         "name": "mcp",

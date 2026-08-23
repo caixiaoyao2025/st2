@@ -128,36 +128,62 @@ class NativeToolAdapter(BaseAdapter):
         wrappers = load_wrappers(package_name="generated_tools",
                                 registration_style="function")
 
-        # A1 parses a function's source/docstring itself -> patch its schema parser.
-        if fmt == "function":
-            self._maybe_patch_a1(agent, wrappers)
+        # A1 (biomni) parses a function's source/docstring itself via
+        # function_to_api_schema to build the schema dict. It may be detected
+        # as `mcp`/`function` format. _maybe_patch_a1 only patches when BOTH
+        # (a) this is Biomni A1 and (b) our wrappers carry canonical
+        # _TOOL_SPEC -- so we never override the official add_tool() behaviour
+        # for unrecognised tools. The patch makes add_tool() build the schema
+        # from _TOOL_SPEC with ZERO LLM calls (fixes
+        # "Generated schema is not a dictionary" on quota failure).
+        self._maybe_patch_a1(agent, wrappers)
 
         # Reshape wrappers to the interface's expected tool schema where possible.
         wrapped = self._adapt_wrappers(wrappers, fmt)
 
-        registered = 0
+        # Per-tool injection report: the success criterion is NOT "N tools
+        # injected" but "N attempted / N accepted by agent.add_tool / N appear
+        # in the agent's registry". The downstream planner (A1.go) then calls
+        # them by name in its generated <execute> blocks.
+        report = {"attempted": 0, "accepted": 0, "rejected": 0,
+                  "by_method": {}, "schema_format": fmt, "details": []}
         for w in wrapped:
-            if hasattr(agent, "add_tool"):
-                try:
-                    agent.add_tool(w)
-                    registered += 1
+            report["attempted"] += 1
+            name = getattr(w, "__name__", "tool")
+            ok = False
+            for method, call in (
+                ("add_tool", lambda: agent.add_tool(w)),
+                ("bind_tools", lambda: agent.bind_tools([w])),
+            ):
+                if not hasattr(agent, method):
                     continue
-                except Exception:
-                    pass
-            if hasattr(agent, "bind_tools"):
                 try:
-                    agent.bind_tools([w])
-                    registered += 1
-                    continue
-                except Exception:
-                    pass
-            if hasattr(agent, "tools"):
-                if agent.tools is None:
-                    agent.tools = []
-                agent.tools.append(w)
-                registered += 1
-        if registered == 0:
-            raise RuntimeError("NativeToolAdapter: no tools could be injected.")
+                    call()
+                    ok = True
+                    report["by_method"][method] = report["by_method"].get(method, 0) + 1
+                    break
+                except Exception as e:  # noqa: BLE001
+                    report["details"].append({"tool": name, "method": method, "error": str(e)})
+            if not ok and hasattr(agent, "tools"):
+                try:
+                    if agent.tools is None:
+                        agent.tools = []
+                    agent.tools.append(w)
+                    ok = True
+                    report["by_method"]["tools_append"] = (
+                        report["by_method"].get("tools_append", 0) + 1)
+                except Exception as e:  # noqa: BLE001
+                    report["details"].append({"tool": name, "method": "tools_append", "error": str(e)})
+            if ok:
+                report["accepted"] += 1
+            else:
+                report["rejected"] += 1
+        self._inject_report = report
+        if report["accepted"] == 0:
+            raise RuntimeError(
+                "NativeToolAdapter: no tools could be injected into the agent. "
+                f"report={report}"
+            )
 
     @staticmethod
     def _adapt_wrappers(wrappers, schema_format: str) -> list:
@@ -200,6 +226,12 @@ class NativeToolAdapter(BaseAdapter):
                 spec_by_name[getattr(w, "__name__", s.get("name"))] = s
                 if s.get("name"):
                     spec_by_name[s["name"]] = s
+        # CAUTION: only override Biomni's official function_to_api_schema when
+        # our OWN canonical wrappers are present. If a caller hands A1 ordinary
+        # functions (no _TOOL_SPEC), we leave the official behaviour intact so
+        # a future A1 version change cannot be silently broken by our patch.
+        if not spec_by_name:
+            return
         # Capture the ORIGINAL implementation before overriding either binding.
         _orig = _a1mod.function_to_api_schema
 
@@ -332,6 +364,7 @@ def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
     try:
         adapter.connect(agent)
         info["injected"] = True
+        info["inject_report"] = getattr(adapter, "_inject_report", None)
     except Exception as exc:
         info["inject_error"] = f"{type(exc).__name__}: {exc}"
         info["driver"] = "error"
