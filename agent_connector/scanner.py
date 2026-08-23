@@ -531,6 +531,15 @@ def _derive_framework(schema: dict[str, Any]) -> str | None:
     return None
 
 
+def _cap_bool(caps: dict[str, Any] | None, key: str) -> bool:
+    """Read a capability flag that may be a bool OR a {supported: bool} dict
+    (detect_capabilities returns booleans for most keys, a dict for 'mcp')."""
+    v = (caps or {}).get(key)
+    if isinstance(v, dict):
+        return bool(v.get("supported"))
+    return bool(v)
+
+
 def detect_tool_interface(schema: dict[str, Any], caps: dict[str, Any]) -> dict[str, Any]:
     """Produce the explicit tool interface contract for this agent.
 
@@ -545,10 +554,11 @@ def detect_tool_interface(schema: dict[str, Any], caps: dict[str, Any]) -> dict[
     reg = schema.get("registration_method")
     style = schema.get("registration_style")
     via_dec = schema.get("registration_via_decorator")
-    mcp_ok = bool((caps.get("mcp") or {}).get("supported"))
-    code_ok = bool((caps.get("code_execution") or {}).get("supported"))
-    config_ok = bool((caps.get("config_wiring") or {}).get("supported"))
-    prompt_ok = bool((caps.get("prompt_wiring") or {}).get("supported"))
+    mcp_ok = _cap_bool(caps, "mcp")
+    native_ok = _cap_bool(caps, "native_tool_calling")
+    code_ok = _cap_bool(caps, "code_execution")
+    config_ok = _cap_bool(caps, "config_wiring")
+    prompt_ok = _cap_bool(caps, "prompt_wiring")
 
     if mcp_ok or reg == "add_mcp":
         schema_format = "mcp"
