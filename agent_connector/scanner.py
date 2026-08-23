@@ -512,6 +512,72 @@ def detect_capabilities(repo_path: str, schema: dict[str, Any]) -> dict[str, Any
     }
 
 
+# --- interface contract -------------------------------------------------
+# The resolver keys off the *interface contract* (registration method,
+# registration style, schema format, execution method), NOT the framework
+# name. Two agents can share a framework (e.g. both "langchain") yet require
+# different tool schemas (StructuredTool vs OpenAI function vs bind_tools).
+
+def _derive_framework(schema: dict[str, Any]) -> str | None:
+    """Best-effort framework hint (informational only; NOT used for adapter
+    selection). Derived from module_path/agent_class, never authoritative."""
+    text = " ".join(str(schema.get(k) or "") for k in ("module_path", "agent_class"))
+    text = text.lower()
+    for name in ("biomni", "cellagent", "geneagent", "biochatter", "langchain",
+                 "crewai", "autogpt", "metagpt", "camel", "smolagents", "dspy",
+                 "openai", "huggingface", "transformers"):
+        if name in text:
+            return name
+    return None
+
+
+def detect_tool_interface(schema: dict[str, Any], caps: dict[str, Any]) -> dict[str, Any]:
+    """Produce the explicit tool interface contract for this agent.
+
+    fields:
+      framework           -- informational hint only (NOT the selector)
+      registration_method -- how a tool is registered (add_tool/add_mcp/...)
+      registration_style  -- function | dict | object
+      schema_format       -- mcp | function | structured_tool | langchain_tool
+                             | openai_function | namespace | config | prompt
+      execution_method    -- go | run | invoke | ...
+    """
+    reg = schema.get("registration_method")
+    style = schema.get("registration_style")
+    via_dec = schema.get("registration_via_decorator")
+    mcp_ok = bool((caps.get("mcp") or {}).get("supported"))
+    code_ok = bool((caps.get("code_execution") or {}).get("supported"))
+    config_ok = bool((caps.get("config_wiring") or {}).get("supported"))
+    prompt_ok = bool((caps.get("prompt_wiring") or {}).get("supported"))
+
+    if mcp_ok or reg == "add_mcp":
+        schema_format = "mcp"
+    elif reg in ("bind_tools", "with_tools"):
+        schema_format = "openai_function"
+    elif reg == "add_tool" and via_dec:
+        schema_format = "structured_tool"
+    elif reg == "add_tool" and style == "function":
+        schema_format = "function"
+    elif reg in ("add_tool", "register_tool", "register") or style in ("function", "object", "dict"):
+        schema_format = "langchain_tool"
+    elif code_ok:
+        schema_format = "namespace"
+    elif config_ok:
+        schema_format = "config"
+    elif prompt_ok:
+        schema_format = "prompt"
+    else:
+        schema_format = "unknown"
+
+    return {
+        "framework": _derive_framework(schema),
+        "registration_method": reg,
+        "registration_style": style,
+        "schema_format": schema_format,
+        "execution_method": schema.get("execution_method"),
+    }
+
+
 def build_schema(
     repo_path: str,
     *,
@@ -624,6 +690,10 @@ def build_schema(
     # First-class capability classification (MCP is the highest-priority,
     # most standard integration path and is checked before wiring_style).
     schema["capabilities"] = detect_capabilities(repo_path, schema)
+    # Explicit interface contract (selection key), derived from capabilities +
+    # registration evidence. Framework is only a hint inside this block.
+    schema["framework"] = _derive_framework(schema)
+    schema["tool_interface"] = detect_tool_interface(schema, schema["capabilities"])
     return schema
 
 

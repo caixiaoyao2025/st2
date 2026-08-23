@@ -98,24 +98,40 @@ class MCPAdapter(BaseAdapter):
 
 class NativeToolAdapter(BaseAdapter):
     """Inject wrapper functions into an agent that supports tool registration
-    (add_tool / tools list / register). The agent's own loop drives them."""
+    (add_tool / tools list / register / bind_tools). The agent's own loop
+    drives them. The exact wrapper *shape* follows the agent's ``schema_format``
+    (interface contract), not the framework name."""
 
     def connect(self, agent: Any) -> None:
         from agent_connector.generator import generate_wiring, load_wrappers
 
+        fmt = (self.schema.get("tool_interface") or {}).get("schema_format") or "function"
         wiring_dir = os.path.join(os.getcwd(), "wiring")
         generate_wiring(self.tools, self.schema, out_dir=wiring_dir)
         if wiring_dir not in sys.path:
             sys.path.insert(0, wiring_dir)
         wrappers = load_wrappers(package_name="generated_tools",
-                                 registration_style="function")
-        self._maybe_patch_a1(agent, wrappers)
+                                registration_style="function")
+
+        # A1 parses a function's source/docstring itself -> patch its schema parser.
+        if fmt == "function":
+            self._maybe_patch_a1(agent, wrappers)
+
+        # Reshape wrappers to the interface's expected tool schema where possible.
+        wrapped = self._adapt_wrappers(wrappers, fmt)
 
         registered = 0
-        for w in wrappers:
+        for w in wrapped:
             if hasattr(agent, "add_tool"):
                 try:
                     agent.add_tool(w)
+                    registered += 1
+                    continue
+                except Exception:
+                    pass
+            if hasattr(agent, "bind_tools"):
+                try:
+                    agent.bind_tools([w])
                     registered += 1
                     continue
                 except Exception:
@@ -127,6 +143,30 @@ class NativeToolAdapter(BaseAdapter):
                 registered += 1
         if registered == 0:
             raise RuntimeError("NativeToolAdapter: no tools could be injected.")
+
+    @staticmethod
+    def _adapt_wrappers(wrappers, schema_format: str) -> list:
+        """Convert the canonical function wrappers into the shape the target
+        agent expects. Falls back to the raw functions when the required
+        library (e.g. langchain) is unavailable."""
+        if schema_format in ("structured_tool", "langchain_tool", "openai_function"):
+            try:
+                from langchain_core.tools import StructuredTool
+            except Exception:
+                return wrappers
+            out = []
+            for w in wrappers:
+                spec = getattr(w, "_TOOL_SPEC", {}) or {}
+                try:
+                    out.append(StructuredTool.from_function(
+                        func=w,
+                        name=spec.get("name") or getattr(w, "__name__", "tool"),
+                        description=spec.get("description") or (getattr(w, "__doc__", "") or ""),
+                    ))
+                except Exception:
+                    out.append(w)
+            return out
+        return wrappers
 
     def _maybe_patch_a1(self, agent: Any, wrappers) -> None:
         cls = (self.schema.get("agent_class") or type(agent).__name__).lower()
@@ -221,40 +261,56 @@ class PromptAdapter(BaseAdapter):
             pass
 
 
+def resolve_adapter(schema: dict, caps: dict):
+    """Pick the adapter by the agent's INTERFACE CONTRACT, never by framework
+    name. Selection is capability + ``tool_interface.schema_format`` driven.
+
+    Same framework (e.g. "langchain") can map to different adapters depending on
+    its concrete tool schema: StructuredTool vs OpenAI-function vs bind_tools.
+    """
+    ti = (schema or {}).get("tool_interface") or {}
+    fmt = ti.get("schema_format")
+    mcp_ok = bool((caps.get("mcp") or {}).get("supported"))
+    native_ok = bool((caps.get("native_tool_calling") or {}).get("supported"))
+    code_ok = bool((caps.get("code_execution") or {}).get("supported"))
+    config_ok = bool((caps.get("config_wiring") or {}).get("supported"))
+
+    # MCP is the most standard, highest-priority contract.
+    if mcp_ok or fmt == "mcp":
+        return MCPAdapter, "mcp"
+    if native_ok or fmt in ("function", "structured_tool", "langchain_tool", "openai_function"):
+        return NativeToolAdapter, fmt or "native_tool"
+    if code_ok or fmt == "namespace":
+        return CodeExecutionAdapter, "namespace"
+    if config_ok or fmt == "config":
+        return ConfigAdapter, "config"
+    return PromptAdapter, "prompt"
+
+
 def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
                   api_key=None, openai_client=None):
-    """Select the right Adapter from capabilities, inject tools into the
-    (already instantiated) downstream agent, return (agent, info). The caller
-    then drives it with run_agent. Our system never substitutes its own loop."""
+    """Select the right Adapter from the interface contract, inject tools into
+    the (already instantiated) downstream agent, return (agent, info). The
+    caller then drives it with run_agent. Our system never substitutes its own
+    loop."""
     caps = (schema or {}).get("capabilities") or {}
-    mcp = caps.get("mcp") or {}
-    native = caps.get("native_tool_calling") or {}
-    code = caps.get("code_execution") or {}
-    config = caps.get("config_wiring") or {}
+    adapter_cls, contract = resolve_adapter(schema, caps)
 
-    info = {"supports_mcp": bool(mcp.get("supported")), "agent_dir": agent_dir}
-    if mcp.get("supported") and agent is not None and hasattr(agent, "add_mcp"):
-        adapter = MCPAdapter(tools, schema, model=model, base_url=base_url,
-                             api_key=api_key, openai_client=openai_client)
-    elif native.get("supported") and agent is not None:
-        adapter = NativeToolAdapter(tools, schema, model=model, base_url=base_url,
-                                    api_key=api_key, openai_client=openai_client)
-    elif code.get("supported") and agent is not None:
-        adapter = CodeExecutionAdapter(tools, schema, model=model, base_url=base_url,
-                                       api_key=api_key, openai_client=openai_client)
-    elif config.get("supported") and agent is not None:
-        adapter = ConfigAdapter(tools, schema, model=model, base_url=base_url,
-                                api_key=api_key, openai_client=openai_client)
-    else:
-        adapter = PromptAdapter(tools, schema, model=model, base_url=base_url,
-                               api_key=api_key, openai_client=openai_client)
-
-    info["adapter"] = adapter.name
+    info = {
+        "supports_mcp": bool((caps.get("mcp") or {}).get("supported")),
+        "tool_interface": (schema or {}).get("tool_interface"),
+        "schema_format": ((schema or {}).get("tool_interface") or {}).get("schema_format"),
+        "adapter_contract": contract,
+        "agent_dir": agent_dir,
+    }
     if agent is None:
         info["error"] = ("No downstream agent was instantiated (create_agent failed); "
                          "cannot drive tools.")
         info["driver"] = "none"
         return agent, info
+    adapter = adapter_cls(tools, schema, model=model, base_url=base_url,
+                          api_key=api_key, openai_client=openai_client)
+    info["adapter"] = adapter.name
     try:
         adapter.connect(agent)
         info["injected"] = True
