@@ -2,13 +2,16 @@
 agent's own planner / tool-loop drive them.
 
 Design rules (per project architecture):
-  * The adapter ONLY does: tool injection, MCP/config/prompt/wrapper conversion,
+  * The adapter ONLY does: agent creation (where the agent has no single
+    go()/run() entry), tool injection, MCP/config/prompt/wrapper conversion,
     and environment preparation.
   * The adapter NEVER implements a planner, tool selection, a multi-turn agent
     loop, or its own LLM calls. That is the downstream agent's job.
-  * After injection, the caller drives the agent with run_agent(agent, prompt)
-    which simply calls the agent's native entry (agent.go(...) / run(...) /
-    invoke(...) / ...). Our system never substitutes its own loop.
+  * After injection, the caller drives the agent with run_agent(agent, prompt).
+    The entry contract is NOT hardcoded: run_agent defers to the capability-
+    selected adapter (e.g. BioChatterAdapter uses conversation.query), and only
+    falls back to probing go/run/invoke when no dedicated adapter is present.
+    Our system never substitutes its own loop.
 """
 
 from __future__ import annotations
@@ -17,12 +20,80 @@ import os
 import sys
 from typing import Any
 
+# Default probe order for agents whose entry contract was NOT discovered as a
+# dedicated adapter. This is a FALLBACK, not the canonical contract -- agents
+# like BioChatter that expose conversation.query(prompt, tools=[...]) are
+# served by their own adapter instead.
 _NATIVE_ENTRIES = ("go", "run", "execute", "predict", "forward", "invoke", "kickoff", "__call__")
 
+# Extensions that likely denote data files the downstream agent may need.
+# Used to build the pre-go() environment context so the agent does NOT have to
+# discover files itself via `find`/shell (which is exactly what destabilised
+# A1's code-execution loop in testing).
+_DATA_EXTS = {
+    ".fasta", ".fa", ".fna", ".ffn", ".frn", ".fq", ".fastq", ".fastq.gz",
+    ".gb", ".gbk", ".gbff", ".gff", ".gtf", ".gff3", ".vcf", ".vcf.gz",
+    ".bam", ".sam", ".bed", ".wig", ".bedgraph", ".pdb", ".cif",
+    ".msa", ".aln", ".phy", ".nex", ".newick", ".nwk", ".tree",
+    ".csv", ".tsv", ".txt", ".json", ".yaml", ".yml", ".h5", ".hdf5",
+    ".bcf", ".cram", ".maf", ".clustal",
+}
 
-def native_entry(agent: Any) -> Any:
-    """Return the downstream agent's native run method (go/run/invoke/...)."""
-    for m in _NATIVE_ENTRIES:
+
+def build_environment_context(roots: list[str] | None = None,
+                               tool_names: list[str] | None = None,
+                               max_files: int = 300) -> str:
+    """Build a concise environment-context block handed to the agent BEFORE it
+    runs, so it never has to probe the filesystem itself.
+
+    Includes: the working directory, the available data files (absolute paths,
+    filtered to bioinformatics-relevant extensions), and the names of the
+    injected tools. Returned as ready-to-prepend text (empty string if nothing
+    to report).
+    """
+    import os
+    roots = roots or [".", "uploads", "data"]
+    found: list[str] = []
+    cwd = os.getcwd()
+    for root in roots:
+        r = root if os.path.isabs(root) else os.path.join(cwd, root)
+        if not os.path.isdir(r):
+            continue
+        for dirpath, _dirs, files in os.walk(r):
+            for fn in files:
+                if os.path.splitext(fn)[1].lower() in _DATA_EXTS:
+                    found.append(os.path.join(dirpath, fn))
+                    if len(found) >= max_files:
+                        break
+            if len(found) >= max_files:
+                break
+        if len(found) >= max_files:
+            break
+    if not found and not tool_names:
+        return ""
+    lines = ["[Environment context -- provided by the runtime, do NOT rediscover "
+             "these files with shell/file commands]:",
+             f"- working_dir: {cwd}"]
+    if found:
+        lines.append("- available data files (absolute paths):")
+        for p in found:
+            lines.append(f"    {os.path.basename(p)} -> {p}")
+    if tool_names:
+        lines.append("- injected tools callable in your namespace:")
+        for t in tool_names:
+            lines.append(f"    {t}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def native_entry(agent: Any, candidates: list[str] | None = None) -> Any:
+    """Return the downstream agent's native run method.
+
+    ``candidates`` lets a discovered entry contract override the default probe
+    order (e.g. an agent whose entry is ``query`` rather than ``go``/``run``).
+    """
+    entries = list(candidates) if candidates else list(_NATIVE_ENTRIES)
+    for m in entries:
         if m == "__call__":
             if callable(agent):
                 return agent
@@ -33,16 +104,40 @@ def native_entry(agent: Any) -> Any:
     return None
 
 
-def run_agent(agent: Any, prompt: str) -> Any:
-    """Single unified entry point: drive the DOWNSTREAM agent's own planner/loop.
-    Our system never runs its own planner here."""
+def run_agent(agent: Any, prompt: str, adapter: Any = None,
+              env_context: str | None = None) -> Any:
+    """Drive the DOWNSTREAM agent's own planner/tool-loop.
+
+    The entry contract is NOT hardcoded here. We prefer the adapter that was
+    selected by the capability registry (it knows how THIS agent runs -- e.g.
+    BioChatter's ``conversation.query``); otherwise we probe the agent for a
+    native entry method. Our system never substitutes its own loop.
+
+    Before driving the agent we prepend a small environment-context block
+    (working dir + data-file paths + injected tool names) so code-execution
+    agents like Biomni A1 start with the facts they need (file locations, tool
+    namespace) instead of shelling out to `find` and destabilising their own
+    execute loop.
+    """
+    ad = adapter or getattr(agent, "_st2_adapter", None)
+    if env_context is None and ad is not None:
+        try:
+            tool_names = [t.get("name") for t in getattr(ad, "tools", []) or []]
+        except Exception:
+            tool_names = None
+        env_context = build_environment_context(tool_names=tool_names)
+    effective_prompt = (env_context + "\n\n" + prompt) if env_context else prompt
+    if ad is not None and hasattr(ad, "run"):
+        return ad.run(agent, effective_prompt)
     fn = native_entry(agent)
     if fn is None:
         raise RuntimeError(
-            "Downstream agent exposes no native entry (go/run/invoke/...). "
-            "Connect a real agent instead of falling back to our own loop."
+            "Downstream agent exposes no recognised native entry. Its entry "
+            "contract must be discovered by the scanner and served by a dedicated "
+            "adapter (e.g. BioChatterAdapter uses conversation.query), rather than "
+            "assuming go/run/invoke."
         )
-    return fn(prompt)
+    return fn(effective_prompt)
 
 
 def _write_mcp_config() -> str:
@@ -77,8 +172,36 @@ class BaseAdapter:
         self.api_key = api_key
         self.openai_client = openai_client
 
+    def create_agent(self, **kwargs) -> Any:
+        """Optional: build the downstream agent object for this interface.
+
+        Most adapters expect the notebook to have instantiated the agent
+        already; interfaces without a single go()/run() entry (e.g. BioChatter)
+        override this to construct their Conversation/backend."""
+        raise NotImplementedError(
+            f"{self.name} does not create an agent; pass an instantiated agent "
+            "to build_runtime, or implement create_agent()."
+        )
+
     def connect(self, agent: Any) -> None:
         raise NotImplementedError
+
+    def run(self, agent: Any, prompt: str) -> Any:
+        """Default entry contract: call the agent's discovered native entry.
+
+        Prefers the scanner-discovered ``execution_method`` (so an agent whose
+        real entry is e.g. ``query`` is honoured) and only falls back to the
+        generic go/run/invoke probe order otherwise."""
+        ti = (self.schema or {}).get("tool_interface") or {}
+        entry = ti.get("execution_method")
+        candidates = [entry] if entry else None
+        fn = native_entry(agent, candidates)
+        if fn is None:
+            raise RuntimeError(
+                f"{self.name}: agent exposes no native entry "
+                f"(execution_method={entry!r}, tried {_NATIVE_ENTRIES})."
+            )
+        return fn(prompt)
 
     @property
     def name(self) -> str:
@@ -403,6 +526,81 @@ class PromptAdapter(BaseAdapter):
             pass
 
 
+class BioChatterAdapter(BaseAdapter):
+    """BioChatter is a Conversation/LLM backend, NOT an Agent with a ``go()``
+    method. Its entry contract is ``conversation.query(prompt, tools=[...])``
+    (or prompt-based tool instructions for models without native calling).
+
+    This adapter builds the Conversation, registers the discovered tools, and
+    drives it via ``query`` -- it never assumes ``agent.go()`` and the runtime
+    never substitutes its own planner/loop.
+    """
+
+    def create_agent(self, **kwargs) -> Any:
+        # Build an OpenAI-compatible chat model and a BioChatter Conversation.
+        # Adjust the import paths to your installed BioChatter version.
+        try:
+            from langchain_openai import ChatOpenAI
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "BioChatterAdapter needs langchain_openai to build the LLM "
+                f"backend: {exc}"
+            )
+        llm = ChatOpenAI(
+            model=self.model or "minimax-m3",
+            openai_api_base=self.base_url,
+            openai_api_key=self.api_key,
+        )
+        try:
+            from biochatter.conversation import Conversation
+        except Exception:
+            try:
+                from biochat import Conversation  # older package layout
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    "Could not import BioChatter's Conversation class. Install "
+                    "biochatter and align the import with your version: "
+                    f"{exc}"
+                )
+        conv = Conversation(llm)
+        return conv
+
+    def connect(self, agent: Any) -> None:
+        # BioChatter receives tools at query time (in-chat tool calling) or via
+        # set_tools(); store the canonical specs and let run() pass them.
+        self._tool_specs = [
+            {
+                "name": t.get("name"),
+                "description": t.get("description"),
+                "parameters": t.get("parameters") or {},
+            }
+            for t in self.tools
+        ]
+        try:
+            if hasattr(agent, "set_tools"):
+                agent.set_tools(self._tool_specs)
+        except Exception:
+            pass
+
+    def run(self, agent: Any, prompt: str) -> Any:
+        specs = getattr(self, "_tool_specs", [])
+        # Try in-chat tool calling first, then the more common single-tool
+        # signature, then a plain query (prompt-based tool fallback).
+        for call in (
+            lambda: agent.query(prompt, tools=specs),
+            lambda: agent.query(prompt, tool=specs),
+            lambda: agent.query(prompt),
+        ):
+            try:
+                return call()
+            except TypeError:
+                continue
+        raise RuntimeError(
+            "BioChatter Conversation has no usable query() signature for the "
+            "installed version."
+        )
+
+
 def resolve_adapter(schema: dict, caps: dict):
     """Deprecated: kept for backwards compatibility. Use
     ``agent_connector.adapter_registry.find_adapter`` which raises on unknown
@@ -441,13 +639,40 @@ def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
         "agent_dir": agent_dir,
     }
     if agent is None:
-        info["error"] = ("No downstream agent was instantiated (create_agent failed); "
-                         "cannot drive tools.")
-        info["driver"] = "none"
-        return agent, info
+        # Some interfaces (e.g. BioChatter) are created by their adapter rather
+        # than pre-instantiated in the notebook. Try that before giving up.
+        try:
+            agent = adapter.create_agent(
+                model=model, base_url=base_url, api_key=api_key,
+                openai_client=openai_client,
+            )
+            info["agent_created_by"] = adapter.name
+        except Exception as exc:
+            info["error"] = (
+                "No downstream agent was instantiated and the adapter could not "
+                f"create one ({type(exc).__name__}: {exc})."
+            )
+            info["driver"] = "none"
+            return agent, info
     adapter = adapter_cls(tools, schema, model=model, base_url=base_url,
                           api_key=api_key, openai_client=openai_client)
     info["adapter"] = adapter.name
+    # Attach the selected adapter to the agent so run_agent() can drive THIS
+    # agent via its own entry contract (e.g. BioChatterAdapter -> query),
+    # instead of assuming a hardcoded go/run/invoke method.
+    try:
+        setattr(agent, "_st2_adapter", adapter)
+        info["entry_contract"] = "adapter:%s" % adapter.name
+    except Exception:
+        info["entry_contract"] = "probe:%s" % ", ".join(_NATIVE_ENTRIES)
+
+    # SETUP-TIME tool dependency provisioning: install each tool's declared /
+    # curated runtime deps into the execution environment (sys.executable, which
+    # is also the interpreter A1's own <execute> blocks run in) BEFORE the agent
+    # ever calls a tool. This is NOT done by the agent at runtime.
+    from agent_connector.tool_runner import install_tool_runtime_dependencies
+    info["tool_dependencies"] = install_tool_runtime_dependencies(tools)
+
     try:
         adapter.connect(agent)
         info["injected"] = True

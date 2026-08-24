@@ -330,6 +330,140 @@ def _run_python(entry_point: str, arguments: dict[str, Any], timeout: int = 600,
     }
 
 
+# --- Setup-time tool dependency provisioning ---------------------------------
+# Dependency installation belongs to SETUP (here), not to runtime and never to
+# the downstream agent guessing. The execution environment is sys.executable
+# (the interpreter that runs _run_python; also the interpreter A1's own
+# generated <execute> blocks run in). We install declared + curated tool deps
+# once, before the agent ever calls a tool.
+
+def _module_source(mod_name: str) -> str:
+    """Best-effort: return a module's source text without importing it (falls
+    back to import + getsource)."""
+    import importlib.util as _ilu
+    try:
+        spec = _ilu.find_spec(mod_name)
+    except Exception:
+        spec = None
+    if spec and getattr(spec, "origin", None) and str(spec.origin).endswith(".py"):
+        try:
+            with open(spec.origin, encoding="utf-8") as _fh:
+                return _fh.read()
+        except Exception:
+            pass
+    try:
+        import importlib, inspect
+        return inspect.getsource(importlib.import_module(mod_name))
+    except Exception:
+        return ""
+
+
+def _third_party_imports(src: str) -> set[str]:
+    """Return curated third-party import names (those in IMPORT_TO_PIP) found
+    in module source. We ONLY act on a curated mapping (e.g. Bio -> biopython)
+    so we never try to pip-install an arbitrary import name."""
+    import ast
+    names: set[str] = set()
+    try:
+        tree = ast.parse(src)
+    except Exception:
+        return names
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for _n in node.names:
+                names.add(_n.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                continue
+            if node.module:
+                names.add(node.module.split(".")[0])
+    from agent_connector.agent_preflight import IMPORT_TO_PIP
+    return {n for n in names if n in IMPORT_TO_PIP}
+
+
+def _is_importable(name: str) -> bool:
+    import importlib.util as _ilu
+    try:
+        return _ilu.find_spec(name) is not None
+    except Exception:
+        return False
+
+
+_HEAVY = {"torch", "tensorflow", "torchvision", "torchaudio", "jax",
+          "cupy", "paddle", "triton", "transformers", "diffusers", "rdkit",
+          "openfold", "alphafold", "esm", "deepchem"}
+
+
+def install_tool_runtime_dependencies(tools, python: str | None = None) -> dict[str, list[str]]:
+    """SETUP-TIME provisioning of tool runtime dependencies.
+
+    For every injected tool, install into the execution interpreter
+    (sys.executable unless a venv is configured):
+      * declared deps: spec['install']['python_packages'] and
+        spec['dependencies'] / spec['install']['dependencies'];
+      * curated imports found in the tool's python helper source
+        (via IMPORT_TO_PIP, e.g. Bio -> biopython).
+
+    Runs once during build_runtime, BEFORE the downstream agent calls any tool.
+    Heavy ML packages are skipped (must be preinstalled in the environment).
+    Returns {installed, skipped, errors}.
+    """
+    python = python or sys.executable
+    seen: set[str] = set()
+    wanted: list[str] = []
+    from agent_connector.agent_preflight import IMPORT_TO_PIP
+    for t in (tools or []):
+        if not isinstance(t, dict):
+            continue
+        # Only python-execution tools run inside our interpreter (_run_python),
+        # so only they need their deps provisioned here. CLI/docker/api tools
+        # bring their own environment and must not trigger bulk pip installs
+        # (e.g. a captured `file:///tmp/...` python_packages entry).
+        exec_type = ((t.get("execution") or {}).get("type")
+                     or t.get("type") or "cli")
+        if exec_type != "python":
+            continue
+        install = t.get("install") or {}
+        for raw in (list(install.get("python_packages") or [])
+                    + list(install.get("dependencies") or [])
+                    + list(t.get("dependencies") or [])):
+            pkg = str(raw).strip()
+            key = pkg.split("==")[0].split(">=")[0].split("<")[0].strip().lower()
+            if pkg and key not in seen:
+                seen.add(key)
+                wanted.append(pkg)
+        ep = (t.get("execution") or {}).get("entry_point") or ""
+        mod = ep.split(":")[0].strip()
+        if mod:
+            for imp in _third_party_imports(_module_source(mod)):
+                pip = IMPORT_TO_PIP.get(imp, imp)
+                key = pip.lower()
+                if pip and key not in seen:
+                    seen.add(key)
+                    wanted.append(pip)
+    result: dict[str, list[str]] = {"installed": [], "skipped": [], "errors": []}
+    for pkg in wanted:
+        base = pkg.split("==")[0].split(">=")[0].split("<")[0].strip().lower()
+        if base in _HEAVY:
+            result["skipped"].append(pkg)
+            continue
+        if _is_importable(base):
+            result["skipped"].append(pkg)
+            continue
+        try:
+            cp = subprocess.run([python, "-m", "pip", "install", "-q", pkg],
+                                capture_output=True, text=True, timeout=900,
+                                encoding="utf-8", errors="replace")
+            if cp.returncode == 0:
+                result["installed"].append(pkg)
+            else:
+                result["errors"].append(
+                    f"pip install {pkg} failed: {cp.stderr.strip()[:200]}")
+        except Exception as _e:
+            result["errors"].append(f"pip install {pkg} error: {_e}")
+    return result
+
+
 def _run_api(execution: dict[str, Any], arguments: dict[str, Any], timeout: int = 60) -> dict[str, Any]:
     import urllib.error
     import urllib.parse

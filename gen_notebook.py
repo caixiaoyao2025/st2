@@ -75,7 +75,7 @@ code([
     "    value='', placeholder='ark-... or sk-...',\n",
     "    description='API Key:', layout=widgets.Layout(width='90%'))\n",
     "model_input = widgets.Text(\n",
-    "    value='glm-5.3',\n",
+    "    value='minimax-m3',\n",
     "    description='Model:', layout=widgets.Layout(width='70%'))\n",
     "base_input = widgets.Text(\n",
     "    value='https://tokenhub.tencentmaas.com/v1',\n",

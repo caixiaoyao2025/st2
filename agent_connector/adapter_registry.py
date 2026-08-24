@@ -52,10 +52,18 @@ DEFAULT_RULES: list[dict[str, Any]] = [
                 "bind_tools / StructuredTool), e.g. Biomni react, LangChain.",
     },
     {
+        "name": "biochatter",
+        "match": {"framework": "biochatter"},
+        "adapter": "BioChatterAdapter",
+        "note": "BioChatter Conversation backend -- drive via conversation.query"
+                "(prompt, tools=[...]); never agent.go(). Placed above the generic"
+                " code-execution rule so BioChatter is not misrouted.",
+    },
+    {
         "name": "code-execution",
         "match": {"code_execution": True},
         "adapter": "CodeExecutionAdapter",
-        "note": "Agents that execute generated code in a namespace (e.g. BioChatter).",
+        "note": "Agents that execute generated code in a namespace (generic fallback).",
     },
 ]
 
@@ -75,7 +83,7 @@ class UnsupportedAgentInterface(Exception):
 def _adapter_class(name: str):
     from agent_connector.adapters import (  # lazy import avoids cycle
         MCPAdapter, NativeToolAdapter, CodeExecutionAdapter,
-        ConfigAdapter, PromptAdapter, BaseAdapter,
+        ConfigAdapter, PromptAdapter, BioChatterAdapter, BaseAdapter,
     )
     table = {
         "MCPAdapter": MCPAdapter,
@@ -83,6 +91,7 @@ def _adapter_class(name: str):
         "CodeExecutionAdapter": CodeExecutionAdapter,
         "ConfigAdapter": ConfigAdapter,
         "PromptAdapter": PromptAdapter,
+        "BioChatterAdapter": BioChatterAdapter,
         "BaseAdapter": BaseAdapter,
     }
     if name not in table:

@@ -42,11 +42,19 @@ adapters:
     note: Agents that register callables (add_tool / tools.append / bind_tools /
           StructuredTool) -- Biomni react, LangChain, OpenAI function calling.
 
+  - name: biochatter
+    match:
+      framework: biochatter
+    adapter: BioChatterAdapter
+    note: BioChatter Conversation backend -- drive via conversation.query(prompt,
+          tools=[...]); never agent.go(). Placed ABOVE the generic code-execution
+          rule so BioChatter is not misrouted to CodeExecutionAdapter.
+
   - name: code-execution
     match:
       code_execution: true
     adapter: CodeExecutionAdapter
-    note: Agents that execute generated code in a namespace (BioChatter).
+    note: Agents that execute generated code in a namespace (generic fallback).
 
   # --- Template for a custom / not-yet-mainstream agent -------------------
   # Copy this block, fill in the match, implement the adapter class in

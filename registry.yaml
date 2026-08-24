@@ -149,6 +149,12 @@ tools:
     execution:
       type: "python"
       entry_point: "tool_helpers:fasta_contig_stats"
+    install:
+      method: pip_pkg
+      python_packages:
+      - biopython
+      declared_packages:
+      - biopython
     inputs:
       fasta_path:
         type: "string"

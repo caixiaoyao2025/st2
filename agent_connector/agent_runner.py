@@ -3,9 +3,11 @@
 The architecture is adapter-based: ``build_runtime`` inspects the detected
 agent capabilities and selects an :mod:`agent_connector.adapters` adapter that
 injects the discovered tools into the (already instantiated) downstream agent.
-The caller then drives the agent with ``run_agent(agent, prompt)``, which simply
-calls the agent's native entry (``agent.go()`` / ``run()`` / ...). Our system
-never substitutes its own planner/tool-loop for the downstream agent's.
+The caller then drives the agent with ``run_agent(agent, prompt)``. The entry
+contract is NOT hardcoded: ``run_agent`` defers to the selected adapter (e.g.
+``BioChatterAdapter`` drives ``conversation.query``), falling back to probing
+``go()``/``run()``/``invoke()`` only when no dedicated adapter exists. Our
+system never substitutes its own planner/tool-loop for the downstream agent's.
 """
 
 from agent_connector.adapters import (
@@ -13,6 +15,7 @@ from agent_connector.adapters import (
     MCPAdapter,
     NativeToolAdapter,
     CodeExecutionAdapter,
+    BioChatterAdapter,
     ConfigAdapter,
     PromptAdapter,
     build_runtime,
@@ -25,6 +28,7 @@ __all__ = [
     "MCPAdapter",
     "NativeToolAdapter",
     "CodeExecutionAdapter",
+    "BioChatterAdapter",
     "ConfigAdapter",
     "PromptAdapter",
     "build_runtime",
