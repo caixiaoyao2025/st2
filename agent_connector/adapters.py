@@ -40,6 +40,25 @@ _DATA_EXTS = {
 }
 
 
+def _truncate(text: Any, limit: int = 600) -> str:
+    """Render a value as a single-line, length-capped string for trace logs."""
+    s = "" if text is None else str(text)
+    s = " ".join(s.split())
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"...(truncated, {len(s)} chars)"
+
+
+def _format_args(args: Any) -> str:
+    """Compact one-line rendering of tool-call arguments."""
+    if not isinstance(args, dict):
+        return _truncate(args, 200)
+    parts = []
+    for k, v in args.items():
+        parts.append(f"{k}={_truncate(v, 120)}")
+    return "(" + ", ".join(parts) + ")"
+
+
 def build_environment_context(roots: list[str] | None = None,
                                tool_names: list[str] | None = None,
                                max_files: int = 300) -> str:
@@ -105,7 +124,7 @@ def native_entry(agent: Any, candidates: list[str] | None = None) -> Any:
 
 
 def run_agent(agent: Any, prompt: str, adapter: Any = None,
-              env_context: str | None = None) -> Any:
+               env_context: str | None = None, verbose: bool = True) -> Any:
     """Drive the DOWNSTREAM agent's own planner/tool-loop.
 
     The entry contract is NOT hardcoded here. We prefer the adapter that was
@@ -120,6 +139,8 @@ def run_agent(agent: Any, prompt: str, adapter: Any = None,
     execute loop.
     """
     ad = adapter or getattr(agent, "_st2_adapter", None)
+    if verbose:
+        print(f"[run_agent] driver = {type(ad).__name__ if ad else 'native_entry'}")
     if env_context is None and ad is not None:
         try:
             tool_names = [t.get("name") for t in getattr(ad, "tools", []) or []]
@@ -128,7 +149,7 @@ def run_agent(agent: Any, prompt: str, adapter: Any = None,
         env_context = build_environment_context(tool_names=tool_names)
     effective_prompt = (env_context + "\n\n" + prompt) if env_context else prompt
     if ad is not None and hasattr(ad, "run"):
-        return ad.run(agent, effective_prompt)
+        return ad.run(agent, effective_prompt, verbose=verbose)
     fn = native_entry(agent)
     if fn is None:
         raise RuntimeError(
@@ -625,11 +646,15 @@ class BioChatterAdapter(BaseAdapter):
         except Exception:  # noqa: BLE001
             return None
 
-    def run(self, agent: Any, prompt: str) -> Any:
+    def run(self, agent: Any, prompt: str, verbose: bool = True) -> Any:
         """Drive the conversation with a tool-calling loop:
         HumanMessage -> LLM (bound to tools) -> if tool_calls: execute each
         resolved tool and feed a ToolMessage back -> repeat until the model
         returns a final answer (no tool_calls).
+
+        When ``verbose`` is True (default) each turn is printed so the caller can
+        see the HumanMessage / AIMessage / tool_call / tool_result trace instead
+        of only the final answer.
 
         Robustness: some backends/models emit the tool call as a *text* block
         in BioChatter's own ``[TOOL_CALL] ... [/TOOL_CALL]`` markup instead of a
@@ -642,13 +667,25 @@ class BioChatterAdapter(BaseAdapter):
         tool_map = getattr(self, "_tool_by_name", {})
         llm = agent.bind_tools(tools) if tools else agent
         messages = [HumanMessage(content=prompt)]
+        if verbose:
+            print(f"[human] {_truncate(prompt, 400)}")
+            if not tools:
+                print("[warn] no tools bound -- the model cannot call any tool; "
+                      "it will likely narrate a plan in text and the loop will stop.")
         max_iter = 8
-        for _ in range(max_iter):
+        for turn in range(max_iter):
             ai = llm.invoke(messages)
             messages.append(ai)
             calls = getattr(ai, "tool_calls", None) or []
             if not calls:
                 calls = self._parse_tool_call_text(getattr(ai, "content", "") or "")
+            if verbose:
+                ai_text = getattr(ai, "content", "") or ""
+                if ai_text:
+                    print(f"[ai-{turn}] {_truncate(ai_text, 500)}")
+                if calls:
+                    for c in calls:
+                        print(f"  -> tool_call: {c.get('name')}{_format_args(c.get('args'))}")
             if not calls:
                 return getattr(ai, "content", ai)
             for idx, call in enumerate(calls):
@@ -665,12 +702,16 @@ class BioChatterAdapter(BaseAdapter):
                     out = fn(**args) if isinstance(args, dict) else fn(args)
                 except Exception as exc:  # noqa: BLE001
                     out = f"ERROR: {type(exc).__name__}: {exc}"
+                if verbose:
+                    print(f"  <- tool_result[{name}]: {_truncate(str(out), 400)}")
                 messages.append(ToolMessage(
                     content=str(out),
                     tool_call_id=cid,
                 ))
         # Hit iteration cap: return whatever the model last produced.
         last = messages[-1]
+        if verbose:
+            print(f"[warn] reached max_iter={max_iter}; returning last message.")
         return getattr(last, "content", last)
 
     def _lookup_tool(self, name):
