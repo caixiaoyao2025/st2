@@ -558,20 +558,31 @@ class BioChatterAdapter(BaseAdapter):
         # (biochatter's `DynamicAgent` is only a tool registry: it exposes just
         # `add_tool` and cannot be queried, which is the object the earlier
         # default path was building.) Build the real conversation class.
-        try:
-            from biochatter.llm_connect import LangChainConversation
-        except Exception:
+        import importlib
+        _candidates = [
+            ("biochatter.llm_connect", "LangChainConversation"),
+            ("biochatter.conversation", "LangChainConversation"),
+            ("biochatter.conversation", "Conversation"),
+            ("biochatter.llm_connect", "Conversation"),
+            ("biochatter", "LangChainConversation"),
+            ("biochatter", "Conversation"),
+        ]
+        ConvCls = None
+        _import_errors = []
+        for _mod, _cls in _candidates:
             try:
-                from biochatter.conversation import LangChainConversation
-            except Exception:
-                try:
-                    from biochatter.conversation import Conversation as LangChainConversation
-                except Exception as exc:  # noqa: BLE001
-                    raise RuntimeError(
-                        "Could not import BioChatter's conversation class "
-                        "(LangChainConversation / Conversation). Install biochatter "
-                        f"and align the import with your version: {exc}"
-                    )
+                _m = importlib.import_module(_mod)
+                _c = getattr(_m, _cls, None)
+                if _c is not None:
+                    ConvCls = _c
+                    break
+            except Exception as _e:  # noqa: BLE001
+                _import_errors.append(f"{_mod}:{_cls} -> {type(_e).__name__}: {_e}")
+        if ConvCls is None:
+            raise RuntimeError(
+                "Could not import a BioChatter conversation class from any known "
+                f"location. Import attempts:\n  " + "\n  ".join(_import_errors)
+            )
         # LangChainConversation builds its chat model via init_chat_model, which
         # for the 'openai' provider reads OPENAI_API_KEY / OPENAI_BASE_URL. Point
         # those at the configured backend (TokenHub / minimax-m3) BEFORE the
@@ -581,11 +592,25 @@ class BioChatterAdapter(BaseAdapter):
             os.environ.setdefault("OPENAI_API_KEY", api_key)
         if base_url:
             os.environ.setdefault("OPENAI_BASE_URL", base_url)
-        conv = LangChainConversation(
-            model_provider="openai",
-            model_name=model,
-            prompts={},
-        )
+        # Try the documented constructor signature first, then fall back to other
+        # arities seen across BioChatter versions, surfacing the real error.
+        _ctor_errors = []
+        for _kwargs in (
+            {"model_provider": "openai", "model_name": model, "prompts": {}},
+            {"model_name": model, "prompts": {}},
+            {"model": model, "prompts": {}},
+            {"model_provider": "openai", "model_name": model},
+        ):
+            try:
+                conv = ConvCls(**_kwargs)
+                break
+            except Exception as _e:  # noqa: BLE001
+                _ctor_errors.append(f"{_cls}({_kwargs}) -> {type(_e).__name__}: {_e}")
+        else:
+            raise RuntimeError(
+                f"Constructing BioChatter {ConvCls.__name__} failed with all tried "
+                f"signatures:\n  " + "\n  ".join(_ctor_errors)
+            )
         try:
             conv.set_api_key()
         except Exception:
@@ -726,12 +751,13 @@ def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
             )
             info["agent_created_by"] = adapter.name
         except Exception as exc:
-            info["error"] = (
-                "No downstream agent was instantiated and the adapter could not "
-                f"create one ({type(exc).__name__}: {exc})."
-            )
-            info["driver"] = "none"
-            return agent, info
+            # Surface the REAL cause rather than returning a silent driver="none"
+            # that only manifests later as "no recognised native entry". The agent
+            # is unusable without its adapter-built Conversation.
+            raise RuntimeError(
+                f"{adapter.name}.create_agent() failed to build the downstream "
+                f"BioChatter Conversation: {type(exc).__name__}: {exc}"
+            ) from exc
     adapter = adapter_cls(tools, schema, model=model, base_url=base_url,
                           api_key=api_key, openai_client=openai_client,
                           agent_dir=agent_dir)
