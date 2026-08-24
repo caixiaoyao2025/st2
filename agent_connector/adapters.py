@@ -660,10 +660,17 @@ class BioChatterAdapter(BaseAdapter):
                 f"BioChatterAdapter needs langchain_openai to build the LLM "
                 f"backend: {exc}"
             )
+        # minimax models (e.g. minimax-m2.7) ONLY accept temperature=1 and reject
+        # any other value, so force it for that family; leave other models at
+        # their default.
+        kwargs = {}
+        if str(model).lower().startswith("minimax"):
+            kwargs["temperature"] = 1
         llm = ChatOpenAI(
             model=model,
             openai_api_base=base_url,
             openai_api_key=api_key,
+            **kwargs,
         )
         print(
             f"[BioChatterAdapter] standalone conversation built:\n"
