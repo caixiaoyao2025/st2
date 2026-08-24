@@ -542,18 +542,13 @@ class BioChatterAdapter(BaseAdapter):
     the runtime never substitutes its own planner/loop.
     """
 
-    def create_agent(self, **kwargs) -> Any:
+    @staticmethod
+    def create_agent(model=None, base_url=None, api_key=None, **kwargs) -> Any:
         # Explicit BioChatter STARTUP CONTRACT: build the runnable Conversation
-        # object. This is NOT a generic adapter.create_agent -- the runtime calls
-        # it (when the notebook leaves agent=None) so that the object handed to
-        # run() is a real conversation, never a bare tool registry.
-        #
-        # build_runtime calls this on the adapter CLASS (before the instance
-        # exists), so the effective model/base_url/api_key must come from kwargs,
-        # falling back to the class defaults, NOT from `self`.
-        model = kwargs.get("model") or self.model or "minimax-m3"
-        base_url = kwargs.get("base_url") or self.base_url
-        api_key = kwargs.get("api_key") or self.api_key
+        # object. This is NOT a generic adapter.create_agent -- build_runtime calls
+        # it on the adapter CLASS (before the instance exists), so it is a
+        # staticmethod that takes model/base_url/api_key directly (no `self`).
+        model = model or "minimax-m3"
         # The RUNNABLE BioChatter object is a Conversation -- NOT a tool host.
         # (biochatter's `DynamicAgent` is only a tool registry: it exposes just
         # `add_tool` and cannot be queried, which is the object the earlier
@@ -755,7 +750,7 @@ def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
             # that only manifests later as "no recognised native entry". The agent
             # is unusable without its adapter-built Conversation.
             raise RuntimeError(
-                f"{adapter_cls.name}.create_agent() failed to build the downstream "
+                f"{adapter_cls.__name__}.create_agent() failed to build the downstream "
                 f"BioChatter Conversation: {type(exc).__name__}: {exc}"
             ) from exc
     adapter = adapter_cls(tools, schema, model=model, base_url=base_url,
