@@ -745,17 +745,17 @@ def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
         # Some interfaces (e.g. BioChatter) are created by their adapter rather
         # than pre-instantiated in the notebook. Try that before giving up.
         try:
-            agent = adapter.create_agent(
+            agent = adapter_cls.create_agent(
                 model=model, base_url=base_url, api_key=api_key,
                 openai_client=openai_client,
             )
-            info["agent_created_by"] = adapter.name
+            info["agent_created_by"] = adapter_cls.name
         except Exception as exc:
             # Surface the REAL cause rather than returning a silent driver="none"
             # that only manifests later as "no recognised native entry". The agent
             # is unusable without its adapter-built Conversation.
             raise RuntimeError(
-                f"{adapter.name}.create_agent() failed to build the downstream "
+                f"{adapter_cls.name}.create_agent() failed to build the downstream "
                 f"BioChatter Conversation: {type(exc).__name__}: {exc}"
             ) from exc
     adapter = adapter_cls(tools, schema, model=model, base_url=base_url,
