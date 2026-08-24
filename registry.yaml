@@ -1,189 +1,214 @@
 tools:
-  - name: "samtools_flagstat"
-    type: "cli"
-    command: "samtools flagstat {bam_path}"
-    description: "Calculate alignment statistics from a BAM file."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 50
-    inputs:
-      bam_path:
-        type: "string"
-        description: "Absolute path to the BAM file inside /data."
-
-  - name: "bedtools_intersect"
-    type: "cli"
-    command: "bedtools intersect -a {a_bed_path} -b {b_bed_path} -wa -wb"
-    description: "Intersect two BED files and return overlapping records."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 100
-    inputs:
-      a_bed_path:
-        type: "string"
-        description: "Absolute path to the first BED file inside /data."
-      b_bed_path:
-        type: "string"
-        description: "Absolute path to the second BED file inside /data."
-
-  - name: "blastn_tabular"
-    type: "cli"
-    command: "blastn -query {query_fasta_path} -db {blast_db_path} -outfmt 6"
-    description: "Run BLASTN and return tabular outfmt 6 hits."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 80
-    inputs:
-      query_fasta_path:
-        type: "string"
-        description: "Absolute path to the query FASTA file inside /data."
-      blast_db_path:
-        type: "string"
-        description: "Absolute path or BLAST database prefix inside /data."
-
-  - name: "fastp_qc"
-    type: "cli"
-    command: "fastp -i {fq_path} -o {filtered_fq_path} -h {html_report_path} -j {json_report_path} -R MCP_fastp_report"
-    description: "Run FASTQ quality control with fastp. Example: fastp -i input.fq -o trimmed.fq -h report.html -j report.json. NOTE: -j is for JSON report, -o is for trimmed FASTQ output (not JSON)."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 30
-    inputs:
-      fq_path:
-        type: "string"
-        description: "Path to input FASTQ file inside /data."
-      filtered_fq_path:
-        type: "string"
-        description: "Target path for the filtered FASTQ output inside /data."
-      html_report_path:
-        type: "string"
-        description: "Target path for the fastp HTML report inside /data."
-      json_report_path:
-        type: "string"
-        description: "Target path for the fastp JSON report inside /data."
-    expected_outputs:
-      - name: "html_report_path"
-        render_as: "text"
-      - name: "json_report_path"
-        render_as: "text"
-
-  - name: "render_qc_png"
-    type: "script"
-    command: "python {script_path} {metrics_tsv_path} {png_output_path}"
-    description: "Run a user-provided Python plotting script that converts a metrics TSV into a PNG image."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 40
-    inputs:
-      script_path:
-        type: "string"
-        description: "Path to a Python plotting script inside /data."
-      metrics_tsv_path:
-        type: "string"
-        description: "Path to a metrics TSV file inside /data."
-      png_output_path:
-        type: "string"
-        description: "Target path for the generated PNG image inside /data."
-    expected_outputs:
-      - name: "metrics_tsv_path"
-        render_as: "dataframe"
-        max_rows: 20
-      - name: "png_output_path"
-        render_as: "image"
-
-  - name: "extract_pdf_summary"
-    type: "script"
-    command: "python -c \"import sys; from pathlib import Path; print(Path(sys.argv[1]).name)\" {pdf_path}"
-    description: "Example PDF-aware tool entry; the server extracts the first three pages from the provided PDF output path."
-    output_control:
-      intercept_large_output: false
-      max_preview_lines: 50
-    inputs:
-      pdf_path:
-        type: "string"
-        description: "Path to a PDF file inside /data."
-    expected_outputs:
-      - name: "pdf_path"
-        render_as: "pdf"
-
-  - name: "picard_collect_alignment_summary"
-    type: "java"
-    command: "java -jar {picard_jar_path} CollectAlignmentSummaryMetrics I={bam_path} O={metrics_tsv_path}"
-    description: "Run Picard CollectAlignmentSummaryMetrics from a user-supplied JAR and render the metrics table."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 60
-    inputs:
-      picard_jar_path:
-        type: "string"
-        description: "Path to picard.jar inside /data."
-      bam_path:
-        type: "string"
-        description: "Path to the input BAM file inside /data."
-      metrics_tsv_path:
-        type: "string"
-        description: "Target path for Picard metrics inside /data."
-    expected_outputs:
-      - name: "metrics_tsv_path"
-        render_as: "dataframe"
-        max_rows: 30
-
-  - name: "count_lines_python"
-    description: "Count the lines and byte size of a text file using the Python execution runner."
-    output_control:
-      intercept_large_output: false
-      max_preview_lines: 50
-    execution:
-      type: "python"
-      entry_point: "tool_helpers:count_lines"
-    inputs:
-      file_path:
-        type: "string"
-        description: "Path to a text file inside /data."
-
-  - name: "fasta_contig_stats_python"
-    description: "Count sequences and total bases in a FASTA file using the Python execution runner."
-    output_control:
-      intercept_large_output: false
-      max_preview_lines: 50
-    execution:
-      type: "python"
-      entry_point: "tool_helpers:fasta_contig_stats"
-    install:
-      method: pip_pkg
-      python_packages:
-      - biopython
-      declared_packages:
-      - biopython
-    inputs:
-      fasta_path:
-        type: "string"
-        description: "Path to a FASTA file inside /data."
-
-  - name: "ensembl_sequence_lookup"
-    description: "Fetch a DNA sequence by Ensembl gene/transcript ID via the Ensembl REST API."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 20
-    execution:
-      type: "api"
-      method: "GET"
-      endpoint: "https://rest.ensembl.org/sequence/id/{id}"
-    inputs:
-      id:
-        type: "string"
-        description: "Ensembl stable ID such as ENSG00000141510."
-
-  - name: "docker_fasta_gc"
-    description: "Compute GC content of a FASTA file inside the staphb/fastqc image using the Docker runner."
-    output_control:
-      intercept_large_output: true
-      max_preview_lines: 50
-    execution:
-      type: "docker"
-      image: "alpine:3.20"
-      command: "sh -c \"grep -v '^>' {fasta_path} | tr -d '\\n' | awk '{{gc=gsub(/[GgCc]/,\\\"\\\"); total=length($0); print \\\"GC%=\\\" (gc/total)*100}}'\""
-    inputs:
-      fasta_path:
-        type: "string"
-        description: "Path to a FASTA file inside /data."
+- name: samtools_flagstat
+  type: cli
+  command: samtools flagstat {bam_path}
+  description: Calculate alignment statistics from a BAM file.
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 50
+  inputs:
+    bam_path:
+      type: string
+      description: Absolute path to the BAM file inside /data.
+- name: bedtools_intersect
+  type: cli
+  command: bedtools intersect -a {a_bed_path} -b {b_bed_path} -wa -wb
+  description: Intersect two BED files and return overlapping records.
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 100
+  inputs:
+    a_bed_path:
+      type: string
+      description: Absolute path to the first BED file inside /data.
+    b_bed_path:
+      type: string
+      description: Absolute path to the second BED file inside /data.
+- name: blastn_tabular
+  type: cli
+  command: blastn -query {query_fasta_path} -db {blast_db_path} -outfmt 6
+  description: Run BLASTN and return tabular outfmt 6 hits.
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 80
+  inputs:
+    query_fasta_path:
+      type: string
+      description: Absolute path to the query FASTA file inside /data.
+    blast_db_path:
+      type: string
+      description: Absolute path or BLAST database prefix inside /data.
+- name: fastp_qc
+  type: cli
+  command: fastp -i {fq_path} -o {filtered_fq_path} -h {html_report_path} -j {json_report_path}
+    -R MCP_fastp_report
+  description: 'Run FASTQ quality control with fastp. Example: fastp -i input.fq -o
+    trimmed.fq -h report.html -j report.json. NOTE: -j is for JSON report, -o is for
+    trimmed FASTQ output (not JSON).'
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 30
+  inputs:
+    fq_path:
+      type: string
+      description: Path to input FASTQ file inside /data.
+    filtered_fq_path:
+      type: string
+      description: Target path for the filtered FASTQ output inside /data.
+    html_report_path:
+      type: string
+      description: Target path for the fastp HTML report inside /data.
+    json_report_path:
+      type: string
+      description: Target path for the fastp JSON report inside /data.
+  expected_outputs:
+  - name: html_report_path
+    render_as: text
+  - name: json_report_path
+    render_as: text
+- name: render_qc_png
+  type: script
+  command: python {script_path} {metrics_tsv_path} {png_output_path}
+  description: Run a user-provided Python plotting script that converts a metrics
+    TSV into a PNG image.
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 40
+  inputs:
+    script_path:
+      type: string
+      description: Path to a Python plotting script inside /data.
+    metrics_tsv_path:
+      type: string
+      description: Path to a metrics TSV file inside /data.
+    png_output_path:
+      type: string
+      description: Target path for the generated PNG image inside /data.
+  expected_outputs:
+  - name: metrics_tsv_path
+    render_as: dataframe
+    max_rows: 20
+  - name: png_output_path
+    render_as: image
+- name: extract_pdf_summary
+  type: script
+  command: python -c "import sys; from pathlib import Path; print(Path(sys.argv[1]).name)"
+    {pdf_path}
+  description: Example PDF-aware tool entry; the server extracts the first three pages
+    from the provided PDF output path.
+  output_control:
+    intercept_large_output: false
+    max_preview_lines: 50
+  inputs:
+    pdf_path:
+      type: string
+      description: Path to a PDF file inside /data.
+  expected_outputs:
+  - name: pdf_path
+    render_as: pdf
+- name: picard_collect_alignment_summary
+  type: java
+  command: java -jar {picard_jar_path} CollectAlignmentSummaryMetrics I={bam_path}
+    O={metrics_tsv_path}
+  description: Run Picard CollectAlignmentSummaryMetrics from a user-supplied JAR
+    and render the metrics table.
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 60
+  inputs:
+    picard_jar_path:
+      type: string
+      description: Path to picard.jar inside /data.
+    bam_path:
+      type: string
+      description: Path to the input BAM file inside /data.
+    metrics_tsv_path:
+      type: string
+      description: Target path for Picard metrics inside /data.
+  expected_outputs:
+  - name: metrics_tsv_path
+    render_as: dataframe
+    max_rows: 30
+- name: count_lines_python
+  description: Count the lines and byte size of a text file using the Python execution
+    runner.
+  output_control:
+    intercept_large_output: false
+    max_preview_lines: 50
+  execution:
+    type: python
+    entry_point: tool_helpers:count_lines
+  inputs:
+    file_path:
+      type: string
+      description: Path to a text file inside /data.
+- name: fasta_contig_stats_python
+  description: Count sequences and total bases in a FASTA file using the Python execution
+    runner.
+  output_control:
+    intercept_large_output: false
+    max_preview_lines: 50
+  execution:
+    type: python
+    entry_point: tool_helpers:fasta_contig_stats
+  install:
+    method: pip_pkg
+    python_packages:
+    - biopython
+    declared_packages:
+    - biopython
+  inputs:
+    fasta_path:
+      type: string
+      description: Path to a FASTA file inside /data.
+- name: reverse_complement_fasta
+  description: Write the reverse-complement of every record in a FASTA file (mirrors
+    seqmagick reverse-complement) using the Python execution runner.
+  output_control:
+    intercept_large_output: false
+    max_preview_lines: 50
+  execution:
+    type: python
+    entry_point: tool_helpers:reverse_complement_fasta
+  install:
+    method: pip_pkg
+    python_packages:
+    - biopython
+    declared_packages:
+    - biopython
+  inputs:
+    fasta_path:
+      type: string
+      description: Path to the input FASTA file inside /data.
+    output_path:
+      type: string
+      description: Path for the reverse-complemented output FASTA file (default rc.fasta).
+- name: ensembl_sequence_lookup
+  description: Fetch a DNA sequence by Ensembl gene/transcript ID via the Ensembl
+    REST API.
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 20
+  execution:
+    type: api
+    method: GET
+    endpoint: https://rest.ensembl.org/sequence/id/{id}
+  inputs:
+    id:
+      type: string
+      description: Ensembl stable ID such as ENSG00000141510.
+- name: docker_fasta_gc
+  description: Compute GC content of a FASTA file inside the staphb/fastqc image using
+    the Docker runner.
+  output_control:
+    intercept_large_output: true
+    max_preview_lines: 50
+  execution:
+    type: docker
+    image: alpine:3.20
+    command: sh -c "grep -v '^>' {fasta_path} | tr -d '\n' | awk '{{gc=gsub(/[GgCc]/,\"\");
+      total=length($0); print \"GC%=\" (gc/total)*100}}'"
+  inputs:
+    fasta_path:
+      type: string
+      description: Path to a FASTA file inside /data.

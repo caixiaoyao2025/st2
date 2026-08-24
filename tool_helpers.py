@@ -24,6 +24,27 @@ def fasta_contig_stats(fasta_path: str) -> dict:
     return {"sequences": sequences, "total_bases": total_bases}
 
 
+def reverse_complement_fasta(fasta_path: str, output_path: str = "rc.fasta") -> dict:
+    """Write the reverse-complement of every record in a FASTA file.
+
+    Uses Biopython so it mirrors seqmagick's ``reverse-complement`` behaviour
+    (reverse order of records, complement each base). Returns the output path
+    and the number of sequences written.
+    """
+    from Bio import SeqIO
+    written = 0
+    out = Path(output_path)
+    with out.open("w", encoding="utf-8") as handle:
+        for record in SeqIO.parse(Path(fasta_path), "fasta"):
+            SeqIO.write(record.reverse_complement(), handle, "fasta")
+            written += 1
+    return {
+        "input": str(Path(fasta_path)),
+        "output": str(out),
+        "sequences": written,
+    }
+
+
 def split_pairwise_overlaps(a_bed_path: str, b_bed_path: str) -> dict:
     """Count per-record overlaps between two BED files with no dependency on bedtools."""
     b_intervals = []
