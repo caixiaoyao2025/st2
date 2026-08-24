@@ -535,7 +535,7 @@ class BioChatterAdapter(BaseAdapter):
     re-implements BioChatter's documented contract -- an LLM conversation that
     calls the injected tools via the model's native function-calling -- directly
     on ``langchain_openai.ChatOpenAI`` (pointed at the configured backend, e.g.
-    TokenHub / minimax-m3).
+    TokenHub / minimax-m2.7).
 
     Startup contract: create_agent() builds the ChatOpenAI backend.
     Tool contract:     connect() resolves each injected tool's python entry_point
@@ -552,7 +552,7 @@ class BioChatterAdapter(BaseAdapter):
         # backend. build_runtime calls this on the adapter CLASS (before the
         # instance exists), so it is a staticmethod taking model/base_url/api_key
         # directly (no `self`).
-        model = model or "minimax-m3"
+        model = model or "minimax-m2.7"
         try:
             from langchain_openai import ChatOpenAI
         except Exception as exc:  # noqa: BLE001
