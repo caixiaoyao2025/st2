@@ -617,39 +617,86 @@ class BioChatterAdapter(BaseAdapter):
                     continue
 
     def run(self, agent: Any, prompt: str) -> Any:
-        """Drive the BioChatter agent WITHOUT assuming a fixed method name.
+        """Drive the BioChatter agent by DERIVING its entry contract from the
+        actual installed object -- not by guessing a fixed list of method names.
 
-        BioChatter's entry method differs by version: legacy `Conversation` uses
-        ``query``, the modern ``DynamicAgent`` does not. We discover the agent's
-        real callable entry (query/run/ask/invoke/answer/chat/__call__) and call
-        it, optionally passing our tool specs where the signature allows. This is
-        the same "discover the entry contract, don't hardcode it" principle as
-        the rest of the runtime.
+        Two structural cases:
+          1. LangGraph-backed agent (BioChatter's modern ``DynamicAgent`` is a
+             compiled LangGraph). Such objects expose ``invoke``/``stream`` that
+             take a ``{"messages": [...]}`` dict, never a bare string. We detect
+             this structurally (presence of ``invoke``/``stream``) and call it
+             with a proper ``HumanMessage``.
+          2. Otherwise we discover a chat-style public callable on the object and
+             call it. If neither works, we raise with the object's REAL public
+             callables so the contract can be aligned to the installed version.
         """
         specs = getattr(self, "_tool_specs", [])
-        candidates = ("query", "run", "ask", "invoke", "answer", "chat", "__call__")
-        for name in candidates:
-            fn = getattr(agent, name, None)
-            if not callable(fn):
-                continue
-            # Try tool-carrying signatures first, then a plain call.
+        # Case 1: LangGraph-style entry (structural detection, not a name guess).
+        for lg in ("invoke", "stream", "ainvoke", "astream"):
+            if callable(getattr(agent, lg, None)):
+                try:
+                    return self._run_langgraph(agent, prompt, lg)
+                except Exception:
+                    # Present but not actually a LangGraph-style call; fall through.
+                    continue
+        # Case 2: discover a chat-style public callable on the object.
+        entry = self._discover_callable(agent)
+        if entry is not None:
+            fn = getattr(agent, entry)
             for call in (
                 lambda: fn(prompt, tools=specs),
                 lambda: fn(prompt, tool=specs),
-                lambda: fn(prompt, tools=specs, functions=specs),
                 lambda: fn(prompt),
             ):
                 try:
                     return call()
                 except TypeError:
                     continue
-            # If it's callable but none of the above signatures matched, the
-            # plain call would have run above; fall through to next candidate.
+        # Give up with actionable, version-specific info.
+        public = [m for m in dir(agent)
+                  if not m.startswith("_") and callable(getattr(agent, m, None))]
         raise RuntimeError(
-            "BioChatter agent has no recognised callable entry method "
-            f"(tried {candidates}). Its installed version's interface is "
-            "unexpected -- align BioChatterAdapter to it."
+            "BioChatter agent entry contract could not be derived from the "
+            f"installed object. Public callables on the agent: {public}"
         )
+
+    @staticmethod
+    def _run_langgraph(agent: Any, prompt: str, method: str) -> Any:
+        """Call a LangGraph-compiled BioChatter agent with a messages dict and
+        extract the last AI message content."""
+        try:
+            from langchain_core.messages import HumanMessage
+        except Exception:
+            from langchain.schema import HumanMessage  # older langchain
+        inp = {"messages": [HumanMessage(content=prompt)]}
+        if method in ("stream", "astream"):
+            parts = []
+            for chunk in agent.stream(inp):
+                msgs = chunk.get("messages", []) if isinstance(chunk, dict) else []
+                for m in msgs:
+                    c = getattr(m, "content", None)
+                    if c:
+                        parts.append(c)
+            return "\n".join(str(p) for p in parts)
+        res = agent.invoke(inp)
+        msgs = res.get("messages", []) if isinstance(res, dict) else []
+        last = msgs[-1] if msgs else res
+        return getattr(last, "content", last)
+
+    @staticmethod
+    def _discover_callable(agent: Any) -> str | None:
+        """Discover a chat-style public callable on the agent object (fallback
+        when the agent is not LangGraph-backed)."""
+        import re
+        verbs = re.compile(
+            r"(query|run|ask|answer|chat|generate|complet|predict|invoke|call)"
+        )
+        found = [
+            m for m in dir(agent)
+            if not m.startswith("_") and callable(getattr(agent, m, None))
+            and verbs.search(m)
+        ]
+        return found[0] if found else None
 
 
 def resolve_adapter(schema: dict, caps: dict):
