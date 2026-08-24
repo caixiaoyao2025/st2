@@ -208,12 +208,19 @@ class BaseAdapter:
     def connect(self, agent: Any) -> None:
         raise NotImplementedError
 
-    def run(self, agent: Any, prompt: str) -> Any:
+    def run(self, agent: Any, prompt: str, verbose: bool = True) -> Any:
         """Default entry contract: call the agent's discovered native entry.
 
         Prefers the scanner-discovered ``execution_method`` (so an agent whose
         real entry is e.g. ``query`` is honoured) and only falls back to the
-        generic go/run/invoke probe order otherwise."""
+        generic go/run/invoke probe order otherwise.
+
+        ``verbose`` is accepted for API uniformity with BioChatterAdapter.run
+        (which prints a turn-by-turn trace); native drivers only optionally use
+        it."""
+        if verbose:
+            print(f"[native-run] driving agent via its native entry "
+                  f"(execution_method={((self.schema or {}).get('tool_interface') or {}).get('execution_method')})")
         ti = (self.schema or {}).get("tool_interface") or {}
         entry = ti.get("execution_method")
         candidates = [entry] if entry else None
