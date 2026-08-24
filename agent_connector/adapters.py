@@ -164,13 +164,14 @@ def _write_mcp_config() -> str:
 
 class BaseAdapter:
     def __init__(self, tools, schema, *, model=None, base_url=None, api_key=None,
-                 openai_client=None):
+                 openai_client=None, agent_dir=None):
         self.tools = tools or []
         self.schema = schema or {}
         self.model = model
         self.base_url = base_url
         self.api_key = api_key
         self.openai_client = openai_client
+        self.agent_dir = agent_dir
 
     def create_agent(self, **kwargs) -> Any:
         """Optional: build the downstream agent object for this interface.
@@ -528,22 +529,24 @@ class PromptAdapter(BaseAdapter):
 
 class BioChatterAdapter(BaseAdapter):
     """BioChatter is a Conversation/LLM backend, NOT an Agent with a ``go()``
-    method. Its entry method differs by version: legacy ``Conversation`` uses
-    ``query``, while modern ``DynamicAgent`` does not. We therefore DISCOVER
-    the agent's real callable entry (query/run/ask/invoke/answer/chat) instead
-    of hardcoding one, and pass the discovered tool specs where the signature
-    allows.
+    method. The runnable object is BioChatter's ``LangChainConversation``
+    (imported from ``biochatter.llm_connect`` in 0.14.x), which is driven by
+    its documented entry ``conversation.query(question, tools=[...])``.
 
-    This adapter builds the agent, registers the discovered tools, and drives it
-    via its own entry -- it never assumes ``agent.go()`` and the runtime never
-    substitutes its own planner/loop.
+    NOTE: biochatter's ``DynamicAgent`` is only a *tool host* (it exposes just
+    ``add_tool`` and cannot be queried) -- it must NOT be used as the agent.
+
+    This adapter builds the real Conversation, resolves each injected tool's
+    python entry_point to a callable and wraps it as a LangChain ``StructuredTool``,
+    then drives the conversation via ``query``. It never assumes ``agent.go()`` and
+    the runtime never substitutes its own planner/loop.
     """
 
     def create_agent(self, **kwargs) -> Any:
-        # Explicit BioChatter STARTUP CONTRACT: build the runnable Conversation /
-        # DynamicAgent object. This is NOT a generic adapter.create_agent -- the
-        # runtime calls it (when the notebook leaves agent=None) so that the object
-        # handed to run() is a real conversation, never a bare tool registry.
+        # Explicit BioChatter STARTUP CONTRACT: build the runnable Conversation
+        # object. This is NOT a generic adapter.create_agent -- the runtime calls
+        # it (when the notebook leaves agent=None) so that the object handed to
+        # run() is a real conversation, never a bare tool registry.
         #
         # build_runtime calls this on the adapter CLASS (before the instance
         # exists), so the effective model/base_url/api_key must come from kwargs,
@@ -551,58 +554,44 @@ class BioChatterAdapter(BaseAdapter):
         model = kwargs.get("model") or self.model or "minimax-m3"
         base_url = kwargs.get("base_url") or self.base_url
         api_key = kwargs.get("api_key") or self.api_key
+        # The RUNNABLE BioChatter object is a Conversation -- NOT a tool host.
+        # (biochatter's `DynamicAgent` is only a tool registry: it exposes just
+        # `add_tool` and cannot be queried, which is the object the earlier
+        # default path was building.) Build the real conversation class.
         try:
-            from langchain_openai import ChatOpenAI
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                "BioChatterAdapter needs langchain_openai to build the LLM "
-                f"backend: {exc}"
-            )
-        llm = ChatOpenAI(
-            model=model,
-            openai_api_base=base_url,
-            openai_api_key=api_key,
-        )
-        try:
-            from biochatter.dynamic_agent import DynamicAgent
+            from biochatter.llm_connect import LangChainConversation
         except Exception:
             try:
-                from biochatter.conversation import Conversation
+                from biochatter.conversation import LangChainConversation
             except Exception:
                 try:
-                    from biochat import Conversation  # older package layout
+                    from biochatter.conversation import Conversation as LangChainConversation
                 except Exception as exc:  # noqa: BLE001
                     raise RuntimeError(
-                        "Could not import BioChatter's agent class "
-                        "(DynamicAgent / Conversation). Install biochatter and "
-                        f"align the import with your version: {exc}"
+                        "Could not import BioChatter's conversation class "
+                        "(LangChainConversation / Conversation). Install biochatter "
+                        f"and align the import with your version: {exc}"
                     )
-        # Modern BioChatter exposes `DynamicAgent`; older versions `Conversation`.
-        # `self.tools` is the instance list; when build_runtime calls this on the
-        # class it is empty -- tools are registered later via connect(), so an
-        # empty `tools=` here is harmless.
-        specs = [
-            {
-                "name": t.get("name"),
-                "description": t.get("description"),
-                "parameters": t.get("parameters") or {},
-            }
-            for t in self.tools
-        ]
+        # LangChainConversation builds its chat model via init_chat_model, which
+        # for the 'openai' provider reads OPENAI_API_KEY / OPENAI_BASE_URL. Point
+        # those at the configured backend (TokenHub / minimax-m3) BEFORE the
+        # model is constructed so the conversation binds the right credentials.
+        import os
+        if api_key:
+            os.environ.setdefault("OPENAI_API_KEY", api_key)
+        if base_url:
+            os.environ.setdefault("OPENAI_BASE_URL", base_url)
+        conv = LangChainConversation(
+            model_provider="openai",
+            model_name=model,
+            prompts={},
+        )
         try:
-            agent_cls = DynamicAgent
-        except NameError:
-            agent_cls = Conversation
-        try:
-            conv = agent_cls(llm, tools=specs)
-        except TypeError:
-            try:
-                conv = agent_cls(llm)
-            except Exception as exc:  # noqa: BLE001
-                raise RuntimeError(
-                    f"Failed to construct BioChatter agent ({agent_cls.__name__}): "
-                    f"{exc}"
-                )
+            conv.set_api_key()
+        except Exception:
+            # Non-interactive / env-driven backends may not need this; the env
+            # vars above already bind the credentials.
+            pass
         # Diagnostic: confirm what was actually built. The BioChatter startup
         # contract must yield a runnable conversation object, NOT a bare tool
         # registry (which would expose only `add_tool`).
@@ -617,9 +606,11 @@ class BioChatterAdapter(BaseAdapter):
         return conv
 
     def connect(self, agent: Any) -> None:
-        # Store the canonical tool specs; BioChatter receives them either at
-        # construction (handled in create_agent) or via a tool-registration
-        # method. Try every known registration entry; ignore the rest.
+        # BioChatter's documented tool contract is: conversation.query(question,
+        # tools=[<LangChain tools>]). So we build REAL LangChain tool objects
+        # from the injected specs (resolving each python entry_point to its
+        # callable) and hand them to query() at run time.
+        from langchain_core.tools import StructuredTool
         self._tool_specs = [
             {
                 "name": t.get("name"),
@@ -628,121 +619,64 @@ class BioChatterAdapter(BaseAdapter):
             }
             for t in self.tools
         ]
-        for attr in ("set_tools", "add_tools", "register_tools", "set_functions"):
+        lc_tools = []
+        for t in self.tools:
+            fn = self._resolve_callable(t)
+            if fn is None:
+                continue
+            try:
+                lc_tools.append(StructuredTool.from_function(
+                    func=fn,
+                    name=t.get("name"),
+                    description=t.get("description") or "",
+                ))
+            except Exception:  # noqa: BLE001
+                continue
+        self._lc_tools = lc_tools
+        # Best-effort: also register via any conversation-level tool API.
+        for attr in ("set_tools", "add_tools", "register_tools"):
             fn = getattr(agent, attr, None)
             if callable(fn):
                 try:
-                    fn(self._tool_specs)
+                    fn(lc_tools)
                     break
-                except Exception:
+                except Exception:  # noqa: BLE001
                     continue
+
+    def _resolve_callable(self, spec: dict):
+        """Resolve a tool spec to a Python callable via its execution
+        entry_point (``module:func``). Returns None if it cannot be imported."""
+        exec_info = spec.get("execution") or {}
+        ep = exec_info.get("entry_point")
+        if not ep or ":" not in ep:
+            return None
+        module_name, func_name = ep.split(":", 1)
+        try:
+            import importlib, os, sys
+            if self.agent_dir and os.path.isdir(self.agent_dir) \
+                    and self.agent_dir not in sys.path:
+                sys.path.insert(0, self.agent_dir)
+            mod = importlib.import_module(module_name)
+            return getattr(mod, func_name, None)
+        except Exception:  # noqa: BLE001
+            return None
 
     def run(self, agent: Any, prompt: str) -> Any:
-        """Drive the BioChatter agent by DERIVING its entry contract from the
-        actual installed object -- not by guessing a fixed list of method names.
-
-        BioChatter's ``DynamicAgent`` is a LangGraph app whose compiled graph
-        (``invoke``/``stream``) often lives on a SUB-object (``.graph`` /
-        ``.app`` / ``._graph``), not as a top-level method -- which is exactly
-        why a naive probe of the agent object sees only e.g. ``add_tool``. We
-        therefore search the object's structure for the real LangGraph entry,
-        then fall back to a chat-style public callable, and finally raise with
-        the object's REAL callable surface so the contract can be aligned.
-        """
-        specs = getattr(self, "_tool_specs", [])
-        # Case 1: find the LangGraph entry anywhere in the object's structure.
-        target, method = self._find_langgraph_entry(agent)
-        if target is not None:
-            try:
-                return self._run_langgraph(target, prompt, method)
-            except Exception:
-                # Found a graph-like object but the call shape differed; keep
-                # trying other derivations below.
-                pass
-        # Case 2: discover a chat-style public callable on the object.
-        entry = self._discover_callable(agent)
-        if entry is not None:
-            fn = getattr(agent, entry)
-            for call in (
-                lambda: fn(prompt, tools=specs),
-                lambda: fn(prompt, tool=specs),
-                lambda: fn(prompt),
-            ):
-                try:
-                    return call()
-                except TypeError:
-                    continue
-        # Give up with actionable, version-specific info.
-        public = [m for m in dir(agent)
-                  if not m.startswith("_") and callable(getattr(agent, m, None))]
-        graph_attrs = [
-            m for m in dir(agent)
-            if not m.startswith("__")
-            and callable(getattr(getattr(agent, m, None), "invoke", None))
-        ]
-        raise RuntimeError(
-            "BioChatter agent entry contract could not be derived from the "
-            f"installed object. Public callables: {public}; "
-            f"attributes holding an invoke(): {graph_attrs}"
-        )
-
-    @staticmethod
-    def _find_langgraph_entry(agent: Any):
-        """Locate the LangGraph-compiled entry, wherever it lives in the object.
-
-        Returns (target_object, method_name) or (None, None). The target may be
-        the agent itself or a nested graph/sub-object (e.g. ``agent.graph``)."""
-        for m in ("invoke", "stream", "ainvoke", "astream"):
-            if callable(getattr(agent, m, None)):
-                return agent, m
-        for attr in dir(agent):
-            if attr.startswith("__"):
-                continue
-            v = getattr(agent, attr, None)
-            if v is None or v is agent:
-                continue
-            for m in ("invoke", "stream", "ainvoke", "astream"):
-                if callable(getattr(v, m, None)):
-                    return v, m
-        return None, None
-
-    @staticmethod
-    def _run_langgraph(agent: Any, prompt: str, method: str) -> Any:
-        """Call a LangGraph-compiled BioChatter agent with a messages dict and
-        extract the last AI message content."""
+        """Drive the BioChatter conversation via its documented entry:
+        ``conversation.query(question, tools=[...])``. Tools are the LangChain
+        tool objects built in connect(); if none resolved, query runs without
+        tools."""
+        tools = getattr(self, "_lc_tools", [])
         try:
-            from langchain_core.messages import HumanMessage
-        except Exception:
-            from langchain.schema import HumanMessage  # older langchain
-        inp = {"messages": [HumanMessage(content=prompt)]}
-        if method in ("stream", "astream"):
-            parts = []
-            for chunk in agent.stream(inp):
-                msgs = chunk.get("messages", []) if isinstance(chunk, dict) else []
-                for m in msgs:
-                    c = getattr(m, "content", None)
-                    if c:
-                        parts.append(c)
-            return "\n".join(str(p) for p in parts)
-        res = agent.invoke(inp)
-        msgs = res.get("messages", []) if isinstance(res, dict) else []
-        last = msgs[-1] if msgs else res
-        return getattr(last, "content", last)
-
-    @staticmethod
-    def _discover_callable(agent: Any) -> str | None:
-        """Discover a chat-style public callable on the agent object (fallback
-        when the agent is not LangGraph-backed)."""
-        import re
-        verbs = re.compile(
-            r"(query|run|ask|answer|chat|generate|complet|predict|invoke|call)"
-        )
-        found = [
-            m for m in dir(agent)
-            if not m.startswith("_") and callable(getattr(agent, m, None))
-            and verbs.search(m)
-        ]
-        return found[0] if found else None
+            result = agent.query(prompt, tools=tools) if tools else agent.query(prompt)
+        except TypeError:
+            # Some versions' query accepts only the question.
+            result = agent.query(prompt)
+        # query may return None and append the answer to conversation.messages.
+        if result is None and getattr(agent, "messages", None):
+            last = agent.messages[-1]
+            return getattr(last, "content", last)
+        return result
 
 
 def resolve_adapter(schema: dict, caps: dict):
@@ -799,7 +733,8 @@ def build_runtime(agent, schema, tools, agent_dir, *, model=None, base_url=None,
             info["driver"] = "none"
             return agent, info
     adapter = adapter_cls(tools, schema, model=model, base_url=base_url,
-                          api_key=api_key, openai_client=openai_client)
+                          api_key=api_key, openai_client=openai_client,
+                          agent_dir=agent_dir)
     info["adapter"] = adapter.name
     # Attach the selected adapter to the agent so run_agent() can drive THIS
     # agent via its own entry contract (e.g. BioChatterAdapter -> query),
