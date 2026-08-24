@@ -553,7 +553,7 @@ class BioChatterAdapter(BaseAdapter):
         # (biochatter's `DynamicAgent` is only a tool registry: it exposes just
         # `add_tool` and cannot be queried, which is the object the earlier
         # default path was building.) Build the real conversation class.
-        import importlib
+        import importlib, subprocess, sys
         _candidates = [
             ("biochatter.llm_connect", "LangChainConversation"),
             ("biochatter.conversation", "LangChainConversation"),
@@ -564,15 +564,61 @@ class BioChatterAdapter(BaseAdapter):
         ]
         ConvCls = None
         _import_errors = []
+
+        def _import_cls(mod_name, cls_name):
+            """Import a BioChatter conversation class, best-effort installing any
+            OPTIONAL provider SDK the module imports at load time (e.g.
+            `anthropic`). We drive BioChatter via the openai provider, so those
+            SDKs are never actually invoked -- but they must be importable.
+            Retries up to a few times in case several optional deps are missing."""
+            for _attempt in range(4):
+                try:
+                    _mod = importlib.import_module(mod_name)
+                    return getattr(_mod, cls_name, None)
+                except ImportError as _ie:
+                    _msg = str(_ie)
+                    _missing = None
+                    if "No module named" in _msg:
+                        _parts = _msg.split("'")
+                        if len(_parts) >= 2:
+                            _missing = _parts[1]
+                    if not _missing:
+                        _import_errors.append(
+                            f"{mod_name}:{cls_name} -> ImportError: {_msg}"
+                        )
+                        return None
+                    try:
+                        subprocess.run(
+                            [sys.executable, "-m", "pip", "install", "--quiet",
+                             _missing],
+                            check=True,
+                        )
+                        print(
+                            f"[BioChatterAdapter] installed missing optional dep "
+                            f"'{_missing}' required to import {mod_name}"
+                        )
+                        continue  # retry the import with the dep now present
+                    except Exception as _e:  # noqa: BLE001
+                        _import_errors.append(
+                            f"{mod_name}:{cls_name} -> pip install {_missing} "
+                            f"failed: {type(_e).__name__}: {_e}"
+                        )
+                        return None
+                except Exception as _e:  # noqa: BLE001
+                    _import_errors.append(
+                        f"{mod_name}:{cls_name} -> {type(_e).__name__}: {_e}"
+                    )
+                    return None
+            _import_errors.append(
+                f"{mod_name}:{cls_name} -> too many import retries"
+            )
+            return None
+
         for _mod, _cls in _candidates:
-            try:
-                _m = importlib.import_module(_mod)
-                _c = getattr(_m, _cls, None)
-                if _c is not None:
-                    ConvCls = _c
-                    break
-            except Exception as _e:  # noqa: BLE001
-                _import_errors.append(f"{_mod}:{_cls} -> {type(_e).__name__}: {_e}")
+            _c = _import_cls(_mod, _cls)
+            if _c is not None:
+                ConvCls = _c
+                break
         if ConvCls is None:
             raise RuntimeError(
                 "Could not import a BioChatter conversation class from any known "
