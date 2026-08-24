@@ -528,12 +528,15 @@ class PromptAdapter(BaseAdapter):
 
 class BioChatterAdapter(BaseAdapter):
     """BioChatter is a Conversation/LLM backend, NOT an Agent with a ``go()``
-    method. Its entry contract is ``conversation.query(prompt, tools=[...])``
-    (or prompt-based tool instructions for models without native calling).
+    method. Its entry method differs by version: legacy ``Conversation`` uses
+    ``query``, while modern ``DynamicAgent`` does not. We therefore DISCOVER
+    the agent's real callable entry (query/run/ask/invoke/answer/chat) instead
+    of hardcoding one, and pass the discovered tool specs where the signature
+    allows.
 
-    This adapter builds the Conversation, registers the discovered tools, and
-    drives it via ``query`` -- it never assumes ``agent.go()`` and the runtime
-    never substitutes its own planner/loop.
+    This adapter builds the agent, registers the discovered tools, and drives it
+    via its own entry -- it never assumes ``agent.go()`` and the runtime never
+    substitutes its own planner/loop.
     """
 
     def create_agent(self, **kwargs) -> Any:
@@ -552,23 +555,23 @@ class BioChatterAdapter(BaseAdapter):
             openai_api_key=self.api_key,
         )
         try:
-            from biochatter.conversation import Conversation
+            from biochatter.dynamic_agent import DynamicAgent
         except Exception:
             try:
-                from biochat import Conversation  # older package layout
-            except Exception as exc:  # noqa: BLE001
-                raise RuntimeError(
-                    "Could not import BioChatter's Conversation class. Install "
-                    "biochatter and align the import with your version: "
-                    f"{exc}"
-                )
-        conv = Conversation(llm)
-        return conv
-
-    def connect(self, agent: Any) -> None:
-        # BioChatter receives tools at query time (in-chat tool calling) or via
-        # set_tools(); store the canonical specs and let run() pass them.
-        self._tool_specs = [
+                from biochatter.conversation import Conversation
+            except Exception:
+                try:
+                    from biochat import Conversation  # older package layout
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(
+                        "Could not import BioChatter's agent class "
+                        "(DynamicAgent / Conversation). Install biochatter and "
+                        f"align the import with your version: {exc}"
+                    )
+        # Modern BioChatter exposes `DynamicAgent`; older versions `Conversation`.
+        # Both are constructed with the LLM backend. Some versions also accept a
+        # `tools=` keyword at construction -- pass our specs when supported.
+        specs = [
             {
                 "name": t.get("name"),
                 "description": t.get("description"),
@@ -577,27 +580,75 @@ class BioChatterAdapter(BaseAdapter):
             for t in self.tools
         ]
         try:
-            if hasattr(agent, "set_tools"):
-                agent.set_tools(self._tool_specs)
-        except Exception:
-            pass
+            agent_cls = DynamicAgent
+        except NameError:
+            agent_cls = Conversation
+        try:
+            conv = agent_cls(llm, tools=specs)
+        except TypeError:
+            try:
+                conv = agent_cls(llm)
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"Failed to construct BioChatter agent ({agent_cls.__name__}): "
+                    f"{exc}"
+                )
+        return conv
+
+    def connect(self, agent: Any) -> None:
+        # Store the canonical tool specs; BioChatter receives them either at
+        # construction (handled in create_agent) or via a tool-registration
+        # method. Try every known registration entry; ignore the rest.
+        self._tool_specs = [
+            {
+                "name": t.get("name"),
+                "description": t.get("description"),
+                "parameters": t.get("parameters") or {},
+            }
+            for t in self.tools
+        ]
+        for attr in ("set_tools", "add_tools", "register_tools", "set_functions"):
+            fn = getattr(agent, attr, None)
+            if callable(fn):
+                try:
+                    fn(self._tool_specs)
+                    break
+                except Exception:
+                    continue
 
     def run(self, agent: Any, prompt: str) -> Any:
+        """Drive the BioChatter agent WITHOUT assuming a fixed method name.
+
+        BioChatter's entry method differs by version: legacy `Conversation` uses
+        ``query``, the modern ``DynamicAgent`` does not. We discover the agent's
+        real callable entry (query/run/ask/invoke/answer/chat/__call__) and call
+        it, optionally passing our tool specs where the signature allows. This is
+        the same "discover the entry contract, don't hardcode it" principle as
+        the rest of the runtime.
+        """
         specs = getattr(self, "_tool_specs", [])
-        # Try in-chat tool calling first, then the more common single-tool
-        # signature, then a plain query (prompt-based tool fallback).
-        for call in (
-            lambda: agent.query(prompt, tools=specs),
-            lambda: agent.query(prompt, tool=specs),
-            lambda: agent.query(prompt),
-        ):
-            try:
-                return call()
-            except TypeError:
+        candidates = ("query", "run", "ask", "invoke", "answer", "chat", "__call__")
+        for name in candidates:
+            fn = getattr(agent, name, None)
+            if not callable(fn):
                 continue
+            # Try tool-carrying signatures first, then a plain call.
+            for call in (
+                lambda: fn(prompt, tools=specs),
+                lambda: fn(prompt, tool=specs),
+                lambda: fn(prompt, tools=specs, functions=specs),
+                lambda: fn(prompt),
+            ):
+                try:
+                    return call()
+                except TypeError:
+                    continue
+            # If it's callable but none of the above signatures matched, the
+            # plain call would have run above; fall through to next candidate.
         raise RuntimeError(
-            "BioChatter Conversation has no usable query() signature for the "
-            "installed version."
+            "BioChatter agent has no recognised callable entry method "
+            f"(tried {candidates}). Its installed version's interface is "
+            "unexpected -- align BioChatterAdapter to it."
         )
 
 
