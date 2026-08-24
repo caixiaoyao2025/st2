@@ -566,6 +566,15 @@ class BioChatterAdapter(BaseAdapter):
             _root = missing_module.split(".", 1)[0]
             return _root.replace("_", "-")
 
+        # Only SMALL, optional provider SDKs are safe to auto-install. Framework
+        # packages (langchain, biochatter, ...) are huge and slow to install, and a
+        # missing *submodule* of them is a version mismatch -- reinstalling the
+        # whole framework is both slow and ineffective. Those bail out fast.
+        _AUTO_INSTALL_ALLOWLIST = {
+            "anthropic", "openai", "langchain-openai", "langchain-anthropic",
+            "google-generativeai", "cohere", "mistralai", "groq", "together",
+        }
+
         def _install_pip(pkg: str) -> bool:
             try:
                 subprocess.run(
@@ -578,12 +587,12 @@ class BioChatterAdapter(BaseAdapter):
                 return False
 
         def _import_module(mod_name: str):
-            """Import a module, best-effort installing the real (distribution)
-            package behind any missing OPTIONAL provider SDK (e.g. `anthropic`).
-            We drive BioChatter via the openai provider, so those SDKs are never
-            invoked -- but they must be importable. Bails out (returns None) if the
-            missing name is a submodule that simply does not exist in this
-            BioChatter version (so we move on instead of pip-installing garbage)."""
+            """Import a module, best-effort installing only SMALL optional
+            provider SDKs (e.g. `anthropic`) behind a missing import. We drive
+            BioChatter via the openai provider, so those SDKs are never invoked --
+            but they must be importable. Bails out (returns None) if the missing
+            name is a framework package/submodule (slow + ineffective to install,
+            and usually a version mismatch) or was already tried."""
             _seen = set()
             for _attempt in range(5):
                 try:
@@ -596,10 +605,15 @@ class BioChatterAdapter(BaseAdapter):
                         if len(_parts) >= 2:
                             _missing = _parts[1]
                     if not _missing or _missing in _seen:
-                        # Submodule genuinely absent in this version: stop here.
+                        # Submodule genuinely absent / already tried: stop here.
                         return None
                     _seen.add(_missing)
-                    if not _install_pip(_pip_package(_missing)):
+                    _pkg = _pip_package(_missing)
+                    if _pkg not in _AUTO_INSTALL_ALLOWLIST:
+                        # Framework package or unknown: do NOT auto-install (slow
+                        # and ineffective for version mismatches). Move on.
+                        return None
+                    if not _install_pip(_pkg):
                         return None
                     continue
                 except Exception:  # noqa: BLE001
