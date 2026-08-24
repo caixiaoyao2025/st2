@@ -554,27 +554,40 @@ class BioChatterAdapter(BaseAdapter):
         # `add_tool` and cannot be queried, which is the object the earlier
         # default path was building.) Build the real conversation class.
         import importlib, subprocess, sys
-        _candidates = [
-            ("biochatter.llm_connect", "LangChainConversation"),
-            ("biochatter.conversation", "LangChainConversation"),
-            ("biochatter.conversation", "Conversation"),
-            ("biochatter.llm_connect", "Conversation"),
-            ("biochatter", "LangChainConversation"),
-            ("biochatter", "Conversation"),
-        ]
-        ConvCls = None
-        _import_errors = []
 
-        def _import_cls(mod_name, cls_name):
-            """Import a BioChatter conversation class, best-effort installing any
-            OPTIONAL provider SDK the module imports at load time (e.g.
-            `anthropic`). We drive BioChatter via the openai provider, so those
-            SDKs are never actually invoked -- but they must be importable.
-            Retries up to a few times in case several optional deps are missing."""
-            for _attempt in range(4):
+        def _pip_package(missing_module: str) -> str:
+            """Map a missing *import module* to its PyPI distribution name.
+
+            'langchain.output_parsers' -> 'langchain'   (submodule of langchain)
+            'biochatter.conversation'  -> 'biochatter'  (submodule of biochatter)
+            'langchain_openai'         -> 'langchain-openai' (top-level, hyphenated)
+            'anthropic'                -> 'anthropic'
+            """
+            _root = missing_module.split(".", 1)[0]
+            return _root.replace("_", "-")
+
+        def _install_pip(pkg: str) -> bool:
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--quiet", pkg],
+                    check=True,
+                )
+                print(f"[BioChatterAdapter] installed missing package '{pkg}'")
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+
+        def _import_module(mod_name: str):
+            """Import a module, best-effort installing the real (distribution)
+            package behind any missing OPTIONAL provider SDK (e.g. `anthropic`).
+            We drive BioChatter via the openai provider, so those SDKs are never
+            invoked -- but they must be importable. Bails out (returns None) if the
+            missing name is a submodule that simply does not exist in this
+            BioChatter version (so we move on instead of pip-installing garbage)."""
+            _seen = set()
+            for _attempt in range(5):
                 try:
-                    _mod = importlib.import_module(mod_name)
-                    return getattr(_mod, cls_name, None)
+                    return importlib.import_module(mod_name)
                 except ImportError as _ie:
                     _msg = str(_ie)
                     _missing = None
@@ -582,47 +595,44 @@ class BioChatterAdapter(BaseAdapter):
                         _parts = _msg.split("'")
                         if len(_parts) >= 2:
                             _missing = _parts[1]
-                    if not _missing:
-                        _import_errors.append(
-                            f"{mod_name}:{cls_name} -> ImportError: {_msg}"
-                        )
+                    if not _missing or _missing in _seen:
+                        # Submodule genuinely absent in this version: stop here.
                         return None
-                    try:
-                        subprocess.run(
-                            [sys.executable, "-m", "pip", "install", "--quiet",
-                             _missing],
-                            check=True,
-                        )
-                        print(
-                            f"[BioChatterAdapter] installed missing optional dep "
-                            f"'{_missing}' required to import {mod_name}"
-                        )
-                        continue  # retry the import with the dep now present
-                    except Exception as _e:  # noqa: BLE001
-                        _import_errors.append(
-                            f"{mod_name}:{cls_name} -> pip install {_missing} "
-                            f"failed: {type(_e).__name__}: {_e}"
-                        )
+                    _seen.add(_missing)
+                    if not _install_pip(_pip_package(_missing)):
                         return None
-                except Exception as _e:  # noqa: BLE001
-                    _import_errors.append(
-                        f"{mod_name}:{cls_name} -> {type(_e).__name__}: {_e}"
-                    )
+                    continue
+                except Exception:  # noqa: BLE001
                     return None
-            _import_errors.append(
-                f"{mod_name}:{cls_name} -> too many import retries"
-            )
             return None
 
-        for _mod, _cls in _candidates:
-            _c = _import_cls(_mod, _cls)
-            if _c is not None:
-                ConvCls = _c
-                break
+        def _discover_conversation_class():
+            """Find the runnable Conversation class in the INSTALLED BioChatter,
+            rather than guessing historical module/class paths. It is the class
+            whose name contains 'Conversation' and that exposes a `query` method
+            (BioChatter's documented entry)."""
+            for _mod_name in ("biochatter.llm_connect", "biochatter.conversation",
+                              "biochatter"):
+                _mod = _import_module(_mod_name)
+                if _mod is None:
+                    continue
+                for _name in dir(_mod):
+                    if "conversation" not in _name.lower():
+                        continue
+                    _obj = getattr(_mod, _name, None)
+                    if isinstance(_obj, type) and callable(getattr(_obj, "query", None)):
+                        return _obj
+            return None
+
+        ConvCls = _discover_conversation_class()
         if ConvCls is None:
             raise RuntimeError(
-                "Could not import a BioChatter conversation class from any known "
-                f"location. Import attempts:\n  " + "\n  ".join(_import_errors)
+                "Could not discover a BioChatter Conversation class (a class named "
+                "*Conversation* exposing a `query` method) in the installed "
+                "biochatter package. Inspect the installed version's real API, e.g.:\n"
+                "  import biochatter, biochatter.llm_connect as lc\n"
+                "  print(biochatter.__version__)\n"
+                "  print([x for x in dir(lc) if 'Conversation' in x])"
             )
         # LangChainConversation builds its chat model via init_chat_model, which
         # for the 'openai' provider reads OPENAI_API_KEY / OPENAI_BASE_URL. Point
