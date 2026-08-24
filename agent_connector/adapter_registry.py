@@ -31,12 +31,24 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         # must therefore be registered via add_tool into that namespace (NOT
         # merely MCP-exposed), so A1's own planner can call them by name.
         # _maybe_patch_a1 overrides function_to_api_schema with our _TOOL_SPEC
-        # so registration makes ZERO LLM calls. Keep above the generic rules.
+        # so registration makes ZERO LLM calls.
         "name": "biomni-native",
         "match": {"framework": "biomni"},
         "adapter": "NativeToolAdapter",
         "note": "Biomni A1 -- inject discovered tools via native add_tool "
                 "into its execution namespace (LLM-free via _TOOL_SPEC patch).",
+    },
+    {
+        # Framework-specific rules MUST precede the generic capability rules
+        # (mcp / native-tool / code-execution) below. BioChatter is often
+        # mis-scanned as MCP-capable (its repo mentions "mcp"), so without this
+        # ordering it would be routed to MCPAdapter and fail with
+        # "no native entry". Keep biochatter ABOVE mcp.
+        "name": "biochatter",
+        "match": {"framework": "biochatter"},
+        "adapter": "BioChatterAdapter",
+        "note": "BioChatter Conversation backend -- drive via conversation.query"
+                "(prompt, tools=[...]); never agent.go().",
     },
     {
         "name": "mcp",
@@ -50,14 +62,6 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "adapter": "NativeToolAdapter",
         "note": "Agents that register callables (add_tool / tools.append / "
                 "bind_tools / StructuredTool), e.g. Biomni react, LangChain.",
-    },
-    {
-        "name": "biochatter",
-        "match": {"framework": "biochatter"},
-        "adapter": "BioChatterAdapter",
-        "note": "BioChatter Conversation backend -- drive via conversation.query"
-                "(prompt, tools=[...]); never agent.go(). Placed above the generic"
-                " code-execution rule so BioChatter is not misrouted.",
     },
     {
         "name": "code-execution",

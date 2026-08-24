@@ -29,6 +29,14 @@ adapters:
     adapter: NativeToolAdapter
     note: Biomni A1 -- inject wrapper functions into its code-execution namespace (LLM-free schema via _TOOL_SPEC patch).
 
+  - name: biochatter
+    match:
+      framework: biochatter
+    adapter: BioChatterAdapter
+    note: BioChatter Conversation backend -- drive via conversation.query(prompt,
+          tools=[...]); never agent.go(). Placed ABOVE mcp/native-tool/code-execution
+          so BioChatter (often mis-scanned as MCP-capable) is not misrouted.
+
   - name: mcp
     match:
       mcp: true
@@ -41,14 +49,6 @@ adapters:
     adapter: NativeToolAdapter
     note: Agents that register callables (add_tool / tools.append / bind_tools /
           StructuredTool) -- Biomni react, LangChain, OpenAI function calling.
-
-  - name: biochatter
-    match:
-      framework: biochatter
-    adapter: BioChatterAdapter
-    note: BioChatter Conversation backend -- drive via conversation.query(prompt,
-          tools=[...]); never agent.go(). Placed ABOVE the generic code-execution
-          rule so BioChatter is not misrouted to CodeExecutionAdapter.
 
   - name: code-execution
     match:
