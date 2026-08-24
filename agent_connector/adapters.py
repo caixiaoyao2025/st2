@@ -598,6 +598,10 @@ class BioChatterAdapter(BaseAdapter):
                     description=t.get("description") or "",
                 ))
                 tool_by_name[name] = fn
+                # Case-insensitive alias so a model that returns 'SeqMagick'
+                # or 'fasta_contig_stats_python' (any case) still resolves.
+                if name:
+                    tool_by_name.setdefault(name.lower(), fn)
             except Exception:  # noqa: BLE001
                 continue
         self._lc_tools = lc_tools
@@ -625,7 +629,14 @@ class BioChatterAdapter(BaseAdapter):
         """Drive the conversation with a tool-calling loop:
         HumanMessage -> LLM (bound to tools) -> if tool_calls: execute each
         resolved tool and feed a ToolMessage back -> repeat until the model
-        returns a final answer (no tool_calls)."""
+        returns a final answer (no tool_calls).
+
+        Robustness: some backends/models emit the tool call as a *text* block
+        in BioChatter's own ``[TOOL_CALL] ... [/TOOL_CALL]`` markup instead of a
+        structured ``tool_calls`` payload. We parse that text format too, and if
+        the named tool is not one we injected we return a corrective ToolMessage
+        (listing the available tools) so the model can self-correct instead of
+        the loop silently stopping on a final-looking answer."""
         from langchain_core.messages import HumanMessage, ToolMessage
         tools = getattr(self, "_lc_tools", [])
         tool_map = getattr(self, "_tool_by_name", {})
@@ -635,26 +646,76 @@ class BioChatterAdapter(BaseAdapter):
         for _ in range(max_iter):
             ai = llm.invoke(messages)
             messages.append(ai)
-            calls = getattr(ai, "tool_calls", None)
+            calls = getattr(ai, "tool_calls", None) or []
+            if not calls:
+                calls = self._parse_tool_call_text(getattr(ai, "content", "") or "")
             if not calls:
                 return getattr(ai, "content", ai)
-            for call in calls:
+            for idx, call in enumerate(calls):
                 name = call.get("name")
                 args = call.get("args") or {}
-                fn = tool_map.get(name)
+                cid = call.get("id") or ("tcall_%d" % idx)
+                fn = self._lookup_tool(name)
                 try:
                     if fn is None:
-                        raise ValueError(f"no such tool: {name}")
+                        avail = ", ".join(sorted(tool_map.keys())) or "(none injected)"
+                        raise ValueError(
+                            f"no such tool: {name!r}; available tools: {avail}"
+                        )
                     out = fn(**args) if isinstance(args, dict) else fn(args)
                 except Exception as exc:  # noqa: BLE001
                     out = f"ERROR: {type(exc).__name__}: {exc}"
                 messages.append(ToolMessage(
                     content=str(out),
-                    tool_call_id=call.get("id", ""),
+                    tool_call_id=cid,
                 ))
         # Hit iteration cap: return whatever the model last produced.
         last = messages[-1]
         return getattr(last, "content", last)
+
+    def _lookup_tool(self, name):
+        if name is None:
+            return None
+        tool_map = getattr(self, "_tool_by_name", {}) or {}
+        return tool_map.get(name) or tool_map.get(name.lower())
+
+    @staticmethod
+    def _parse_tool_call_text(content: str) -> list:
+        """Parse BioChatter-style ``[TOOL_CALL] {tool => ..., args => {}} [/TOOL_CALL]``
+        blocks out of free text into a list of ``{"name", "args"}`` dicts. Returns
+        [] if none are found. Best-effort: args may be JSON or CLI-style
+        ``--key value`` / ``key="value"`` pairs."""
+        import re, json
+        if not content:
+            return []
+        blocks = re.findall(
+            r"\[TOOL_CALL\](.*?)\[/TOOL_CALL\]", content, flags=re.DOTALL
+        )
+        calls = []
+        for block in blocks:
+            tm = re.search(r"tool\s*=>\s*\"?([A-Za-z0-9_\-\.]+)\"?", block)
+            if not tm:
+                continue
+            name = tm.group(1)
+            am = re.search(r"args\s*=>\s*(\{.*?\})", block, flags=re.DOTALL)
+            args = {}
+            if am:
+                raw = am.group(1).strip()
+                try:
+                    args = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    # CLI-style: --operation "info" --input "x" --output "y"
+                    for km in re.finditer(
+                        r"(?:--)?([A-Za-z0-9_\-]+)\s*:?\s*\"([^\"]*)\"|"
+                        r"(?:--)?([A-Za-z0-9_\-]+)\s+(\S+)",
+                        block,
+                    ):
+                        k = km.group(1) or km.group(3)
+                        v = km.group(2) if km.group(2) is not None else km.group(4)
+                        if k and k != "tool" and k != "args":
+                            args[k] = v
+            calls.append({"name": name, "args": args})
+        return calls
 
 
 def resolve_adapter(schema: dict, caps: dict):
