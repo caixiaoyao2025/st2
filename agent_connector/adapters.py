@@ -59,6 +59,66 @@ def _format_args(args: Any) -> str:
     return "(" + ", ".join(parts) + ")"
 
 
+def _extract_final_answer(raw: Any) -> str:
+    """Pull a clean final-answer string out of a downstream agent's return.
+
+    Some agents (e.g. Biomni A1) return their FULL transcript / a result object
+    instead of just the answer. We never want that whole blob surfaced to the
+    user as 'the result', so we normalise to the final answer text only."""
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, dict):
+        for key in ("final_answer", "answer", "output", "result", "response"):
+            if raw.get(key):
+                return str(raw[key])
+        msgs = raw.get("messages") or raw.get("trajectory") or []
+        if isinstance(msgs, list):
+            for m in reversed(msgs):
+                content = getattr(m, "content", None)
+                if content is None and isinstance(m, dict):
+                    content = m.get("content")
+                if content:
+                    return str(content)
+        # Last resort: stringify the dict without the heavy fields.
+        light = {k: v for k, v in raw.items()
+                 if k not in ("messages", "trajectory", "transcript")}
+        return str(light)
+    for attr in ("final_answer", "answer", "output", "content"):
+        if hasattr(raw, attr):
+            v = getattr(raw, attr)
+            if v:
+                return str(v)
+    if isinstance(raw, (list, tuple)):
+        # Biomni A1's go() commonly returns (final_answer, trajectory) or a
+        # (trajectory, answer) pair. Prefer a dict carrying 'final_answer', then
+        # the first non-empty string element, so we surface the answer -- not the
+        # whole transcript -- as the result.
+        for item in raw:
+            if isinstance(item, dict) and item.get("final_answer"):
+                return str(item["final_answer"])
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                return item
+        return "\n".join(str(x) for x in raw)
+    return str(raw)
+
+
+def _structured_result(final_answer: str, tool_calls: list, tool_results: list,
+                      status: str = "success") -> dict:
+    """Canonical, UI-friendly result: final answer + structured tool trace.
+
+    The full agent transcript is NEVER included here -- it lives only in the
+    verbose stdout log (debug), so it cannot pollute the displayed result."""
+    return {
+        "status": status,
+        "final_answer": final_answer,
+        "tool_calls": tool_calls,
+        "tool_results": tool_results,
+    }
+
+
 def build_environment_context(roots: list[str] | None = None,
                                tool_names: list[str] | None = None,
                                max_files: int = 300) -> str:
@@ -149,16 +209,22 @@ def run_agent(agent: Any, prompt: str, adapter: Any = None,
         env_context = build_environment_context(tool_names=tool_names)
     effective_prompt = (env_context + "\n\n" + prompt) if env_context else prompt
     if ad is not None and hasattr(ad, "run"):
-        return ad.run(agent, effective_prompt, verbose=verbose)
-    fn = native_entry(agent)
-    if fn is None:
-        raise RuntimeError(
-            "Downstream agent exposes no recognised native entry. Its entry "
-            "contract must be discovered by the scanner and served by a dedicated "
-            "adapter (e.g. BioChatterAdapter uses conversation.query), rather than "
-            "assuming go/run/invoke."
-        )
-    return fn(effective_prompt)
+        result = ad.run(agent, effective_prompt, verbose=verbose)
+    else:
+        fn = native_entry(agent)
+        if fn is None:
+            raise RuntimeError(
+                "Downstream agent exposes no recognised native entry. Its entry "
+                "contract must be discovered by the scanner and served by a dedicated "
+                "adapter (e.g. BioChatterAdapter uses conversation.query), rather than "
+                "assuming go/run/invoke."
+            )
+        result = fn(effective_prompt)
+    # Normalise to the canonical structured result so the UI never shows a raw
+    # agent transcript. Adapters already return this shape; this is a safety net.
+    if isinstance(result, dict) and "final_answer" in result:
+        return result
+    return _structured_result(_extract_final_answer(result), [], [])
 
 
 def _write_mcp_config() -> str:
@@ -217,7 +283,9 @@ class BaseAdapter:
 
         ``verbose`` is accepted for API uniformity with BioChatterAdapter.run
         (which prints a turn-by-turn trace); native drivers only optionally use
-        it."""
+        it. The returned value is normalised to a structured result so the
+        downstream UI shows only the final answer, never the agent's raw
+        transcript."""
         if verbose:
             print(f"[native-run] driving agent via its native entry "
                   f"(execution_method={((self.schema or {}).get('tool_interface') or {}).get('execution_method')})")
@@ -230,7 +298,11 @@ class BaseAdapter:
                 f"{self.name}: agent exposes no native entry "
                 f"(execution_method={entry!r}, tried {_NATIVE_ENTRIES})."
             )
-        return fn(prompt)
+        raw = fn(prompt)
+        final = _extract_final_answer(raw)
+        if verbose:
+            print(f"[native-run] final answer extracted (len={len(final)})")
+        return _structured_result(final, [], [])
 
     @property
     def name(self) -> str:
@@ -680,6 +752,8 @@ class BioChatterAdapter(BaseAdapter):
                 print("[warn] no tools bound -- the model cannot call any tool; "
                       "it will likely narrate a plan in text and the loop will stop.")
         max_iter = 8
+        tool_calls_log = []
+        tool_results_log = []
         for turn in range(max_iter):
             ai = llm.invoke(messages)
             messages.append(ai)
@@ -694,12 +768,15 @@ class BioChatterAdapter(BaseAdapter):
                     for c in calls:
                         print(f"  -> tool_call: {c.get('name')}{_format_args(c.get('args'))}")
             if not calls:
-                return getattr(ai, "content", ai)
+                return _structured_result(
+                    getattr(ai, "content", ai) or "",
+                    tool_calls_log, tool_results_log)
             for idx, call in enumerate(calls):
                 name = call.get("name")
                 args = call.get("args") or {}
                 cid = call.get("id") or ("tcall_%d" % idx)
                 fn = self._lookup_tool(name)
+                tool_calls_log.append(name)
                 try:
                     if fn is None:
                         avail = ", ".join(sorted(tool_map.keys())) or "(none injected)"
@@ -709,6 +786,7 @@ class BioChatterAdapter(BaseAdapter):
                     out = fn(**args) if isinstance(args, dict) else fn(args)
                 except Exception as exc:  # noqa: BLE001
                     out = f"ERROR: {type(exc).__name__}: {exc}"
+                tool_results_log.append(out)
                 if verbose:
                     print(f"  <- tool_result[{name}]: {_truncate(str(out), 400)}")
                 messages.append(ToolMessage(
@@ -719,7 +797,9 @@ class BioChatterAdapter(BaseAdapter):
         last = messages[-1]
         if verbose:
             print(f"[warn] reached max_iter={max_iter}; returning last message.")
-        return getattr(last, "content", last)
+        return _structured_result(
+            getattr(last, "content", last) or "",
+            tool_calls_log, tool_results_log)
 
     def _lookup_tool(self, name):
         if name is None:
