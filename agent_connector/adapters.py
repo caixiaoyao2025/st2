@@ -653,9 +653,9 @@ class BioChatterAdapter(BaseAdapter):
         module_name, func_name = ep.split(":", 1)
         try:
             import importlib, os, sys
-            if self.agent_dir and os.path.isdir(self.agent_dir) \
-                    and self.agent_dir not in sys.path:
-                sys.path.insert(0, self.agent_dir)
+            for p in (self.agent_dir, os.getcwd()):
+                if p and os.path.isdir(p) and p not in sys.path:
+                    sys.path.insert(0, p)
             mod = importlib.import_module(module_name)
             return getattr(mod, func_name, None)
         except Exception:  # noqa: BLE001
