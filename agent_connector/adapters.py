@@ -528,178 +528,53 @@ class PromptAdapter(BaseAdapter):
 
 
 class BioChatterAdapter(BaseAdapter):
-    """BioChatter is a Conversation/LLM backend, NOT an Agent with a ``go()``
-    method. The runnable object is BioChatter's ``LangChainConversation``
-    (imported from ``biochatter.llm_connect`` in 0.14.x), which is driven by
-    its documented entry ``conversation.query(question, tools=[...])``.
+    """Standalone BioChatter-style adapter.
 
-    NOTE: biochatter's ``DynamicAgent`` is only a *tool host* (it exposes just
-    ``add_tool`` and cannot be queried) -- it must NOT be used as the agent.
+    We do NOT import the ``biochatter`` package (its conversation class has
+    version/import friction with the installed langchain). Instead this adapter
+    re-implements BioChatter's documented contract -- an LLM conversation that
+    calls the injected tools via the model's native function-calling -- directly
+    on ``langchain_openai.ChatOpenAI`` (pointed at the configured backend, e.g.
+    TokenHub / minimax-m3).
 
-    This adapter builds the real Conversation, resolves each injected tool's
-    python entry_point to a callable and wraps it as a LangChain ``StructuredTool``,
-    then drives the conversation via ``query``. It never assumes ``agent.go()`` and
-    the runtime never substitutes its own planner/loop.
+    Startup contract: create_agent() builds the ChatOpenAI backend.
+    Tool contract:     connect() resolves each injected tool's python entry_point
+                       to a callable and wraps it as a LangChain StructuredTool.
+    Run contract:      run() drives a tool-calling loop (query -> tool_calls ->
+                       execute -> ToolMessage -> repeat) and returns the final
+                       answer. It never assumes ``agent.go()`` and the runtime
+                       never substitutes its own planner/loop.
     """
 
     @staticmethod
     def create_agent(model=None, base_url=None, api_key=None, **kwargs) -> Any:
-        # Explicit BioChatter STARTUP CONTRACT: build the runnable Conversation
-        # object. This is NOT a generic adapter.create_agent -- build_runtime calls
-        # it on the adapter CLASS (before the instance exists), so it is a
-        # staticmethod that takes model/base_url/api_key directly (no `self`).
+        # Explicit BioChatter STARTUP CONTRACT: build the runnable conversation
+        # backend. build_runtime calls this on the adapter CLASS (before the
+        # instance exists), so it is a staticmethod taking model/base_url/api_key
+        # directly (no `self`).
         model = model or "minimax-m3"
-        # The RUNNABLE BioChatter object is a Conversation -- NOT a tool host.
-        # (biochatter's `DynamicAgent` is only a tool registry: it exposes just
-        # `add_tool` and cannot be queried, which is the object the earlier
-        # default path was building.) Build the real conversation class.
-        import importlib, subprocess, sys
-
-        def _pip_package(missing_module: str) -> str:
-            """Map a missing *import module* to its PyPI distribution name.
-
-            'langchain.output_parsers' -> 'langchain'   (submodule of langchain)
-            'biochatter.conversation'  -> 'biochatter'  (submodule of biochatter)
-            'langchain_openai'         -> 'langchain-openai' (top-level, hyphenated)
-            'anthropic'                -> 'anthropic'
-            """
-            _root = missing_module.split(".", 1)[0]
-            return _root.replace("_", "-")
-
-        # Only SMALL, optional provider SDKs are safe to auto-install. Framework
-        # packages (langchain, biochatter, ...) are huge and slow to install, and a
-        # missing *submodule* of them is a version mismatch -- reinstalling the
-        # whole framework is both slow and ineffective. Those bail out fast.
-        _AUTO_INSTALL_ALLOWLIST = {
-            "anthropic", "openai", "langchain-openai", "langchain-anthropic",
-            "google-generativeai", "cohere", "mistralai", "groq", "together",
-        }
-
-        def _install_pip(pkg: str) -> bool:
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "--quiet", pkg],
-                    check=True,
-                )
-                print(f"[BioChatterAdapter] installed missing package '{pkg}'")
-                return True
-            except Exception:  # noqa: BLE001
-                return False
-
-        def _import_module(mod_name: str):
-            """Import a module, best-effort installing only SMALL optional
-            provider SDKs (e.g. `anthropic`) behind a missing import. We drive
-            BioChatter via the openai provider, so those SDKs are never invoked --
-            but they must be importable. Bails out (returns None) if the missing
-            name is a framework package/submodule (slow + ineffective to install,
-            and usually a version mismatch) or was already tried."""
-            _seen = set()
-            for _attempt in range(5):
-                try:
-                    return importlib.import_module(mod_name)
-                except ImportError as _ie:
-                    _msg = str(_ie)
-                    _missing = None
-                    if "No module named" in _msg:
-                        _parts = _msg.split("'")
-                        if len(_parts) >= 2:
-                            _missing = _parts[1]
-                    if not _missing or _missing in _seen:
-                        # Submodule genuinely absent / already tried: stop here.
-                        return None
-                    _seen.add(_missing)
-                    _pkg = _pip_package(_missing)
-                    if _pkg not in _AUTO_INSTALL_ALLOWLIST:
-                        # Framework package or unknown: do NOT auto-install (slow
-                        # and ineffective for version mismatches). Move on.
-                        return None
-                    if not _install_pip(_pkg):
-                        return None
-                    continue
-                except Exception:  # noqa: BLE001
-                    return None
-            return None
-
-        def _discover_conversation_class():
-            """Find the runnable Conversation class in the INSTALLED BioChatter,
-            rather than guessing historical module/class paths. It is the class
-            whose name contains 'Conversation' and that exposes a `query` method
-            (BioChatter's documented entry)."""
-            for _mod_name in ("biochatter.llm_connect", "biochatter.conversation",
-                              "biochatter"):
-                _mod = _import_module(_mod_name)
-                if _mod is None:
-                    continue
-                for _name in dir(_mod):
-                    if "conversation" not in _name.lower():
-                        continue
-                    _obj = getattr(_mod, _name, None)
-                    if isinstance(_obj, type) and callable(getattr(_obj, "query", None)):
-                        return _obj
-            return None
-
-        ConvCls = _discover_conversation_class()
-        if ConvCls is None:
-            raise RuntimeError(
-                "Could not discover a BioChatter Conversation class (a class named "
-                "*Conversation* exposing a `query` method) in the installed "
-                "biochatter package. Inspect the installed version's real API, e.g.:\n"
-                "  import biochatter, biochatter.llm_connect as lc\n"
-                "  print(biochatter.__version__)\n"
-                "  print([x for x in dir(lc) if 'Conversation' in x])"
-            )
-        # LangChainConversation builds its chat model via init_chat_model, which
-        # for the 'openai' provider reads OPENAI_API_KEY / OPENAI_BASE_URL. Point
-        # those at the configured backend (TokenHub / minimax-m3) BEFORE the
-        # model is constructed so the conversation binds the right credentials.
-        import os
-        if api_key:
-            os.environ.setdefault("OPENAI_API_KEY", api_key)
-        if base_url:
-            os.environ.setdefault("OPENAI_BASE_URL", base_url)
-        # Try the documented constructor signature first, then fall back to other
-        # arities seen across BioChatter versions, surfacing the real error.
-        _ctor_errors = []
-        for _kwargs in (
-            {"model_provider": "openai", "model_name": model, "prompts": {}},
-            {"model_name": model, "prompts": {}},
-            {"model": model, "prompts": {}},
-            {"model_provider": "openai", "model_name": model},
-        ):
-            try:
-                conv = ConvCls(**_kwargs)
-                break
-            except Exception as _e:  # noqa: BLE001
-                _ctor_errors.append(f"{_cls}({_kwargs}) -> {type(_e).__name__}: {_e}")
-        else:
-            raise RuntimeError(
-                f"Constructing BioChatter {ConvCls.__name__} failed with all tried "
-                f"signatures:\n  " + "\n  ".join(_ctor_errors)
-            )
         try:
-            conv.set_api_key()
-        except Exception:
-            # Non-interactive / env-driven backends may not need this; the env
-            # vars above already bind the credentials.
-            pass
-        # Diagnostic: confirm what was actually built. The BioChatter startup
-        # contract must yield a runnable conversation object, NOT a bare tool
-        # registry (which would expose only `add_tool`).
-        _cls = conv.__class__
-        print(
-            "[BioChatterAdapter] startup contract created:\n"
-            f"  type      = {_cls}\n"
-            f"  module    = {_cls.__module__}\n"
-            f"  name      = {_cls.__name__}\n"
-            f"  public    = {[m for m in dir(conv) if not m.startswith('_')]}"
+            from langchain_openai import ChatOpenAI
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"BioChatterAdapter needs langchain_openai to build the LLM "
+                f"backend: {exc}"
+            )
+        llm = ChatOpenAI(
+            model=model,
+            openai_api_base=base_url,
+            openai_api_key=api_key,
         )
-        return conv
+        print(
+            f"[BioChatterAdapter] standalone conversation built:\n"
+            f"  model = {model}\n  base_url = {base_url}"
+        )
+        return llm
 
     def connect(self, agent: Any) -> None:
-        # BioChatter's documented tool contract is: conversation.query(question,
-        # tools=[<LangChain tools>]). So we build REAL LangChain tool objects
-        # from the injected specs (resolving each python entry_point to its
-        # callable) and hand them to query() at run time.
+        # Build REAL LangChain tool objects from the injected specs (resolving
+        # each python entry_point to its callable) so the model can call them via
+        # native function-calling.
         from langchain_core.tools import StructuredTool
         self._tool_specs = [
             {
@@ -710,28 +585,23 @@ class BioChatterAdapter(BaseAdapter):
             for t in self.tools
         ]
         lc_tools = []
+        tool_by_name = {}
         for t in self.tools:
             fn = self._resolve_callable(t)
             if fn is None:
                 continue
+            name = t.get("name")
             try:
                 lc_tools.append(StructuredTool.from_function(
                     func=fn,
-                    name=t.get("name"),
+                    name=name,
                     description=t.get("description") or "",
                 ))
+                tool_by_name[name] = fn
             except Exception:  # noqa: BLE001
                 continue
         self._lc_tools = lc_tools
-        # Best-effort: also register via any conversation-level tool API.
-        for attr in ("set_tools", "add_tools", "register_tools"):
-            fn = getattr(agent, attr, None)
-            if callable(fn):
-                try:
-                    fn(lc_tools)
-                    break
-                except Exception:  # noqa: BLE001
-                    continue
+        self._tool_by_name = tool_by_name
 
     def _resolve_callable(self, spec: dict):
         """Resolve a tool spec to a Python callable via its execution
@@ -752,21 +622,39 @@ class BioChatterAdapter(BaseAdapter):
             return None
 
     def run(self, agent: Any, prompt: str) -> Any:
-        """Drive the BioChatter conversation via its documented entry:
-        ``conversation.query(question, tools=[...])``. Tools are the LangChain
-        tool objects built in connect(); if none resolved, query runs without
-        tools."""
+        """Drive the conversation with a tool-calling loop:
+        HumanMessage -> LLM (bound to tools) -> if tool_calls: execute each
+        resolved tool and feed a ToolMessage back -> repeat until the model
+        returns a final answer (no tool_calls)."""
+        from langchain_core.messages import HumanMessage, ToolMessage
         tools = getattr(self, "_lc_tools", [])
-        try:
-            result = agent.query(prompt, tools=tools) if tools else agent.query(prompt)
-        except TypeError:
-            # Some versions' query accepts only the question.
-            result = agent.query(prompt)
-        # query may return None and append the answer to conversation.messages.
-        if result is None and getattr(agent, "messages", None):
-            last = agent.messages[-1]
-            return getattr(last, "content", last)
-        return result
+        tool_map = getattr(self, "_tool_by_name", {})
+        llm = agent.bind_tools(tools) if tools else agent
+        messages = [HumanMessage(content=prompt)]
+        max_iter = 8
+        for _ in range(max_iter):
+            ai = llm.invoke(messages)
+            messages.append(ai)
+            calls = getattr(ai, "tool_calls", None)
+            if not calls:
+                return getattr(ai, "content", ai)
+            for call in calls:
+                name = call.get("name")
+                args = call.get("args") or {}
+                fn = tool_map.get(name)
+                try:
+                    if fn is None:
+                        raise ValueError(f"no such tool: {name}")
+                    out = fn(**args) if isinstance(args, dict) else fn(args)
+                except Exception as exc:  # noqa: BLE001
+                    out = f"ERROR: {type(exc).__name__}: {exc}"
+                messages.append(ToolMessage(
+                    content=str(out),
+                    tool_call_id=call.get("id", ""),
+                ))
+        # Hit iteration cap: return whatever the model last produced.
+        last = messages[-1]
+        return getattr(last, "content", last)
 
 
 def resolve_adapter(schema: dict, caps: dict):
