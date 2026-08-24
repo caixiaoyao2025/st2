@@ -540,8 +540,17 @@ class BioChatterAdapter(BaseAdapter):
     """
 
     def create_agent(self, **kwargs) -> Any:
-        # Build an OpenAI-compatible chat model and a BioChatter Conversation.
-        # Adjust the import paths to your installed BioChatter version.
+        # Explicit BioChatter STARTUP CONTRACT: build the runnable Conversation /
+        # DynamicAgent object. This is NOT a generic adapter.create_agent -- the
+        # runtime calls it (when the notebook leaves agent=None) so that the object
+        # handed to run() is a real conversation, never a bare tool registry.
+        #
+        # build_runtime calls this on the adapter CLASS (before the instance
+        # exists), so the effective model/base_url/api_key must come from kwargs,
+        # falling back to the class defaults, NOT from `self`.
+        model = kwargs.get("model") or self.model or "minimax-m3"
+        base_url = kwargs.get("base_url") or self.base_url
+        api_key = kwargs.get("api_key") or self.api_key
         try:
             from langchain_openai import ChatOpenAI
         except Exception as exc:  # noqa: BLE001
@@ -550,9 +559,9 @@ class BioChatterAdapter(BaseAdapter):
                 f"backend: {exc}"
             )
         llm = ChatOpenAI(
-            model=self.model or "minimax-m3",
-            openai_api_base=self.base_url,
-            openai_api_key=self.api_key,
+            model=model,
+            openai_api_base=base_url,
+            openai_api_key=api_key,
         )
         try:
             from biochatter.dynamic_agent import DynamicAgent
@@ -569,8 +578,9 @@ class BioChatterAdapter(BaseAdapter):
                         f"align the import with your version: {exc}"
                     )
         # Modern BioChatter exposes `DynamicAgent`; older versions `Conversation`.
-        # Both are constructed with the LLM backend. Some versions also accept a
-        # `tools=` keyword at construction -- pass our specs when supported.
+        # `self.tools` is the instance list; when build_runtime calls this on the
+        # class it is empty -- tools are registered later via connect(), so an
+        # empty `tools=` here is harmless.
         specs = [
             {
                 "name": t.get("name"),
@@ -593,6 +603,17 @@ class BioChatterAdapter(BaseAdapter):
                     f"Failed to construct BioChatter agent ({agent_cls.__name__}): "
                     f"{exc}"
                 )
+        # Diagnostic: confirm what was actually built. The BioChatter startup
+        # contract must yield a runnable conversation object, NOT a bare tool
+        # registry (which would expose only `add_tool`).
+        _cls = conv.__class__
+        print(
+            "[BioChatterAdapter] startup contract created:\n"
+            f"  type      = {_cls}\n"
+            f"  module    = {_cls.__module__}\n"
+            f"  name      = {_cls.__name__}\n"
+            f"  public    = {[m for m in dir(conv) if not m.startswith('_')]}"
+        )
         return conv
 
     def connect(self, agent: Any) -> None:
@@ -620,25 +641,24 @@ class BioChatterAdapter(BaseAdapter):
         """Drive the BioChatter agent by DERIVING its entry contract from the
         actual installed object -- not by guessing a fixed list of method names.
 
-        Two structural cases:
-          1. LangGraph-backed agent (BioChatter's modern ``DynamicAgent`` is a
-             compiled LangGraph). Such objects expose ``invoke``/``stream`` that
-             take a ``{"messages": [...]}`` dict, never a bare string. We detect
-             this structurally (presence of ``invoke``/``stream``) and call it
-             with a proper ``HumanMessage``.
-          2. Otherwise we discover a chat-style public callable on the object and
-             call it. If neither works, we raise with the object's REAL public
-             callables so the contract can be aligned to the installed version.
+        BioChatter's ``DynamicAgent`` is a LangGraph app whose compiled graph
+        (``invoke``/``stream``) often lives on a SUB-object (``.graph`` /
+        ``.app`` / ``._graph``), not as a top-level method -- which is exactly
+        why a naive probe of the agent object sees only e.g. ``add_tool``. We
+        therefore search the object's structure for the real LangGraph entry,
+        then fall back to a chat-style public callable, and finally raise with
+        the object's REAL callable surface so the contract can be aligned.
         """
         specs = getattr(self, "_tool_specs", [])
-        # Case 1: LangGraph-style entry (structural detection, not a name guess).
-        for lg in ("invoke", "stream", "ainvoke", "astream"):
-            if callable(getattr(agent, lg, None)):
-                try:
-                    return self._run_langgraph(agent, prompt, lg)
-                except Exception:
-                    # Present but not actually a LangGraph-style call; fall through.
-                    continue
+        # Case 1: find the LangGraph entry anywhere in the object's structure.
+        target, method = self._find_langgraph_entry(agent)
+        if target is not None:
+            try:
+                return self._run_langgraph(target, prompt, method)
+            except Exception:
+                # Found a graph-like object but the call shape differed; keep
+                # trying other derivations below.
+                pass
         # Case 2: discover a chat-style public callable on the object.
         entry = self._discover_callable(agent)
         if entry is not None:
@@ -655,10 +675,36 @@ class BioChatterAdapter(BaseAdapter):
         # Give up with actionable, version-specific info.
         public = [m for m in dir(agent)
                   if not m.startswith("_") and callable(getattr(agent, m, None))]
+        graph_attrs = [
+            m for m in dir(agent)
+            if not m.startswith("__")
+            and callable(getattr(getattr(agent, m, None), "invoke", None))
+        ]
         raise RuntimeError(
             "BioChatter agent entry contract could not be derived from the "
-            f"installed object. Public callables on the agent: {public}"
+            f"installed object. Public callables: {public}; "
+            f"attributes holding an invoke(): {graph_attrs}"
         )
+
+    @staticmethod
+    def _find_langgraph_entry(agent: Any):
+        """Locate the LangGraph-compiled entry, wherever it lives in the object.
+
+        Returns (target_object, method_name) or (None, None). The target may be
+        the agent itself or a nested graph/sub-object (e.g. ``agent.graph``)."""
+        for m in ("invoke", "stream", "ainvoke", "astream"):
+            if callable(getattr(agent, m, None)):
+                return agent, m
+        for attr in dir(agent):
+            if attr.startswith("__"):
+                continue
+            v = getattr(agent, attr, None)
+            if v is None or v is agent:
+                continue
+            for m in ("invoke", "stream", "ainvoke", "astream"):
+                if callable(getattr(v, m, None)):
+                    return v, m
+        return None, None
 
     @staticmethod
     def _run_langgraph(agent: Any, prompt: str, method: str) -> Any:
